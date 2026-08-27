@@ -14,6 +14,7 @@ from config.incident_config import (
     INCIDENT_STATE,
     INCIDENT_COLORS,
     INCIDENT_ARGUMENTS,
+    INCIDENT_ARGUMENTS_V2
 )
 from util.file_util import get_xml_file
 from util.time_util import convert_timestamp_to_readable
@@ -70,7 +71,7 @@ class IncidentManager:
         """
         return self.text_dic.get(index)
 
-    def _insert_arguments(self, base_text: str, args: List) -> str:
+    def _insert_arguments(self, base_text: str, args: List) -> str | None:
         """
         Insert arguments into base text.
 
@@ -81,6 +82,8 @@ class IncidentManager:
         Returns:
             str: String with inserted arguments
         """
+        if not base_text:
+            return None
 
         words = base_text.split(" ")  # Splits on a single space
         new_words = []
@@ -135,26 +138,45 @@ class IncidentManager:
                                 digit_len = int(digit_len)
 
                                 # longValue argument from arguments list filled to match the correct length
-                                digit_to_insert = str(
-                                    args[0][INCIDENT_ARGUMENTS["d"]]
-                                ).zfill(digit_len)
-                            else:
+                                # Differs between DB versions
+                                # Check V1 first, than V2
+                                digit_to_insert = None
+                                if INCIDENT_ARGUMENTS["d"] in args[0]:
+                                    digit_to_insert = str(
+                                        args[0][INCIDENT_ARGUMENTS["d"]]
+                                    ).zfill(digit_len)
+                                elif "_d" in args[0] and INCIDENT_ARGUMENTS_V2["d"] == args[0]["_d"]:
+                                    digit_to_insert = str(
+                                        args[0]["value"]
+                                    ).zfill(digit_len)
 
-                                digit_to_insert = str(args[0][INCIDENT_ARGUMENTS["d"]])
+                            else:
+                                digit_to_insert = None
+                                if INCIDENT_ARGUMENTS["d"] in args[0]:
+                                    digit_to_insert = str(args[0][INCIDENT_ARGUMENTS["d"]])
+                                elif "_d" in args[0] and INCIDENT_ARGUMENTS_V2["d"] == args[0]["_d"]:
+                                    digit_to_insert = str(args[0]["value"])
 
                             part = part.replace("%d", digit_to_insert)
-
                             args.pop(0)
 
                         elif "s" in part:
 
                             # Find text to insert from text dic, then replace the %s with it
-                            part = part.replace(
-                                "%s",
-                                self._get_text_by_index(
-                                    args[0][INCIDENT_ARGUMENTS["s"]]
-                                ),
-                            )
+                            if INCIDENT_ARGUMENTS["s"] in args[0]:
+                                part = part.replace(
+                                    "%s",
+                                    self._get_text_by_index(
+                                        args[0][INCIDENT_ARGUMENTS["s"]]
+                                    ),
+                                )
+                            elif "_d" in args[0] and INCIDENT_ARGUMENTS_V2["s"] == args[0]["_d"]:
+                                part = part.replace(
+                                    "%s",
+                                    self._get_text_by_index(
+                                        args[0]["value"]
+                                    ),
+                                )
                             args.pop(0)
                         else:
 
@@ -164,16 +186,30 @@ class IncidentManager:
 
                                 precision = int(match.group(1))
                                 # Replaces %.2f or similar with formatted number from argument
-                                part = part.replace(
-                                    f"%.{precision}f",
-                                    f"{args[0][INCIDENT_ARGUMENTS["f"]]:.{precision}f}",
-                                )
+
+                                if INCIDENT_ARGUMENTS["f"] in args[0]:
+                                    part = part.replace(
+                                        f"%.{precision}f",
+                                        f"{args[0][INCIDENT_ARGUMENTS["f"]]:.{precision}f}",
+                                    )
+                                elif "_d" in args[0] and INCIDENT_ARGUMENTS_V2["f"] == args[0]["_d"]:
+                                    part = part.replace(
+                                        f"%.{precision}f",
+                                        f"{args[0]["value"]:.{precision}f}",
+                                    )
+
                                 args.pop(0)
                             else:
 
-                                part = part.replace(
-                                    "%f", str(args[0][INCIDENT_ARGUMENTS["f"]])
-                                )
+                                if INCIDENT_ARGUMENTS["f"] in args[0]:
+                                    part = part.replace(
+                                        "%f", str(args[0][INCIDENT_ARGUMENTS["f"]])
+                                    )
+                                elif "_d" in args[0] and INCIDENT_ARGUMENTS_V2["f"] == args[0]["_d"]:
+                                    part = part.replace(
+                                        "%f", str(args[0]["value"])
+                                    )
+
                                 args.pop(0)
 
                     else:
@@ -228,7 +264,7 @@ class IncidentManager:
         else:
             return text
 
-    def _parse_help_text(self, base_help_text: str) -> str:
+    def _parse_help_text(self, base_help_text: str) -> str | None:
         """
         Parse help text and extract text.
 
@@ -239,25 +275,31 @@ class IncidentManager:
             str: Readable help text
         """
 
-        decoded_help_text = html.unescape(base_help_text)
+        if base_help_text:
+            decoded_help_text = html.unescape(base_help_text)
+            soup = BeautifulSoup(decoded_help_text, "html.parser")
 
-        soup = BeautifulSoup(decoded_help_text, "html.parser")
+            return soup.get_text(separator="/n")
 
-        return soup.get_text(separator="/n")
+        return None
 
     def add_db_entry(self, entry: dict) -> None:
         """Add an incident entry to the list."""
 
-        self.db_entries.append(
-            {
-                "timestamp": entry["timestamp"],
-                "tidx": entry["tidx"],
-                "help_tidx": entry["help_tidx"],
-                "type": entry["type"],
-                "state": entry["state"],
-                "args": json.loads(entry["args"]),
-            }
-        )
+        try:
+            self.db_entries.append(
+                {
+                    "timestamp": entry["timestamp"],
+                    "tidx": entry["tidx"],
+                    "help_tidx": entry["help_tidx"],
+                    "type": entry["type"],
+                    "state": entry["state"],
+                    "args": json.loads(entry["args"]),
+                }
+            )
+        except Exception as e:
+            print(f"WARNING: BAD ENTRY {entry}")
+            print(f"ERROR: {e}")
 
     def get_db_entries(self) -> List:
         """Get the list of db entries."""
@@ -274,15 +316,15 @@ class IncidentManager:
             Tuple: Color for the label, color for the text
         """
 
-        if entry["state"] == INCIDENT_STATE["clear"]:
+        if entry["state"] in INCIDENT_STATE["clear"]:
 
             if (
-                entry["type"] == INCIDENT_TYPE["event"]
+                entry["type"] in INCIDENT_TYPE["event"]
             ):  # Incident is an event: return grey/green
                 return INCIDENT_COLORS["clear"], INCIDENT_COLORS["event"]
 
             elif (
-                entry["type"] == INCIDENT_TYPE["warning"]
+                entry["type"] in INCIDENT_TYPE["warning"]
             ):  # Incident is a warning: return grey/orange
                 return INCIDENT_COLORS["clear"], INCIDENT_COLORS["warning"]
 
@@ -292,12 +334,12 @@ class IncidentManager:
         else:
 
             if (
-                entry["type"] == INCIDENT_TYPE["event"]
+                entry["type"] in INCIDENT_TYPE["event"]
             ):  # Incident is an event: return green/black
                 return INCIDENT_COLORS["event"], INCIDENT_COLORS["black_text"]
 
             elif (
-                entry["type"] == INCIDENT_TYPE["warning"]
+                entry["type"] in INCIDENT_TYPE["warning"]
             ):  # Incident is a warning: return orange/black
                 return INCIDENT_COLORS["warning"], INCIDENT_COLORS["black_text"]
 

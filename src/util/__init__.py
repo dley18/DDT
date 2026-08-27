@@ -10,6 +10,7 @@ This package contains various utility functions for:
 from .file_util import *
 from .validation import *
 from .time_util import *
+from .util_functions import *
 
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "get_path",
     "ensure_directory_exists",
     "get_file_size",
+    "get_lz4_database_version",
     "decompress_datadownload",
     "merge_database_files",
     "get_database_filepaths",
@@ -30,4 +32,6 @@ __all__ = [
     "enter_time_zone_offset",
     "apply_time_zone_offset_to_incidents",
     "apply_time_zone_offset_to_report",
+    "find_min_max_time",
+    "flip_bits",
 ]

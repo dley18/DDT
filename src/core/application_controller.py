@@ -27,18 +27,18 @@ class ApplicationController:
             create_folder(DATA_FOLDER_PATH)
 
             # Create main window
-            print("DEBUG: Creating MainWindow()")
+            print("DEBUG: Creating MainWindow - from {application_controller.start_application}")
             self.main_window = MainWindow()
-            print("DEBUG: MainWindow created")
+            print("DEBUG: MainWindow created - from {application_controller.start_application}")
 
             # Set up UI callbacks
             self.setup_ui_callbacks()
-            print("DEBUG: UI callbacks set up")
+            print("DEBUG: UI Callbacks Ready - from {application_controller.start_application}")
 
             # Start main loop
-            print("DEBUG: Entering Tk mainloop")
+            print("DEBUG: Entering Mainloop - from {application_controller.start_application}")
             self.main_window.run()
-            print("DEBUG: Tk mainloop exited")
+            print("DEBUG: Mainloop exited - from {application_controller.start_application}")
 
         except Exception as e:
             # Do NOT swallow startup errors; write a log so packaged exe isn't silent
@@ -69,6 +69,7 @@ class ApplicationController:
         self.main_window.set_callback("files_added", self.on_files_added)
         self.main_window.set_callback("files_removed", self.on_files_removed)
         self.main_window.set_callback("files_cleared", self.on_files_cleared)
+        self.main_window.set_callback("data_folder_opened", self.on_data_folder_opened)
         self.main_window.set_callback(
             "close_database_connections", self.close_database_connections
         )
@@ -86,24 +87,26 @@ class ApplicationController:
         # Incident callbacks
         self.main_window.set_callback("populate_incidents", self.on_populate_incidents)
         self.main_window.set_callback("populate_report", self.on_populate_report)
+        self.main_window.set_callback("export_incidents", self.on_export_incidents)
 
-    def on_files_added(self, count: int) -> None:
+    def on_files_added(self, count: int, params: dict) -> None:
         """Handle files added event."""
         try:
-            # Log or process the file addition
-            pass
-            # Additional business logic could go here
-
+            self.file_ready_event.clear()
+            thread = threading.Thread(
+                target=self._files_added_background,
+                args=(params,),
+                name="FileLoading",
+            )
+            thread.daemon = True
+            thread.start()
         except Exception as e:
-            if self.main_window:
-                self.main_window.update_status(f"Error processing added files: {e}")
+            self.main_window.update_status(f"Error: {e}")
 
     def on_files_removed(self, count: int) -> None:
         """Handle files removed event."""
         try:
-            # Log or process the file removal
-            pass
-            # Additional business logic could go here
+            self.merged_file = ""
 
         except Exception as e:
             if self.main_window:
@@ -112,13 +115,22 @@ class ApplicationController:
     def on_files_cleared(self, count: int) -> None:
         """Handle files cleared event."""
         try:
-            # Log or process the file clearing
-            pass
-            # Additional business logic could go here
+            self.merged_file = ""
 
         except Exception as e:
             if self.main_window:
                 self.main_window.update_status(f"Error processing cleared files: {e}")
+
+    def on_data_folder_opened(self) -> None:
+        """Handle data folder opened."""
+        try:
+            # Log or process data folder opening
+            pass
+            # Additional business logic could go here
+            
+        except Exception as e:
+            if self.main_window:
+                self.main_window.update_status(f"Error opening data folder: {e}")
 
     def close_database_connections(self) -> None:
         """Close all open connections before deletion."""
@@ -213,96 +225,153 @@ class ApplicationController:
         except Exception as e:
             self.main_window.update_status(f"Error: {e}")
 
+    def on_export_incidents(self) -> None:
+        """Handle export request from incident viewer."""
+
+        try:
+            thread = threading.Thread(
+                target=self._export_incidents_background,
+                name="IncidentExport",
+            )
+            thread.daemon = True
+            thread.start()
+        except Exception as e:
+            self.main_window.update_status(f"Error: {e}")
+
+    def _files_added_background(self, params: dict) -> None:
+        """Background thread that triggers after adding files."""
+        try:
+            self.start_progress_bar()
+            if self.merged_file is None:
+                # Load, extract, and merge LZ4's
+                self._update_ui_safe("Extracting archive...")
+
+                if params["files"]:
+                    print("DEBUG: Merging Files - from {workflow_manager.load_files}")
+                    self.merged_file = self.workflow_manager.load_files(params["files"])
+                    self.file_ready_event.set()
+                    points = self.workflow_manager.pull_io_points()
+                    params["search_panel"].populate(points)
+                    self.workflow_manager.set_time_zone_offset(None)
+                else:
+                    self._update_ui_safe("No files selected on Home Screen")
+                    self.workflow_manager.set_time_zone_offset(None)
+
+                # Check if file loaded
+            if self.merged_file != "":
+                self._update_ui_safe("Files loaded")
+                self.main_window.enable_database_deletion()
+                self.main_window.enable_graphing_btns()
+                self.main_window.enable_incident_population()
+            else:
+                self._update_ui_safe("Failed to load merged file")
+
+            self.stop_progress_bar()
+
+        except Exception as e:
+            self.stop_progress_bar()
+            self._update_ui_safe(f"An error occured when extracting archive: {e}")
+
     def _generate_graphs_background(self, params: dict) -> None:
         """Background thread for graph generation."""
         try:
+            self.start_progress_bar()
             # Check if file has previously been created
             if self.merged_file is None:
-                # Stage 1: File loading (20% progress)
-                self._update_ui_safe("Loading files...", 0.1)
-                if params["files"]:
-                    self.merged_file = self.workflow_manager.load_files(params["files"])
-                    self.file_ready_event.set()
-                    self.workflow_manager.set_time_zone_offset(None)
-
-                else:
-                    self._update_ui_safe("No files selected on Home screen.", 0)
-                    self.main_window.enable_graphing_btns()
-                    return
+                self._update_ui_safe("No files selected on Home screen.")
+                self.main_window.enable_graphing_btns()
+                self.stop_progress_bar()
+                return
 
             # Check if file loaded
             if self.merged_file != "":
-                self._update_ui_safe("Files loaded", 0.2)
+                self._update_ui_safe("Files loaded")
                 self.main_window.enable_database_deletion()
             else:
-                self._update_ui_safe("Failed to load merged file", 0)
+                self._update_ui_safe("Failed to load merged file")
 
             # Stage 2: Data processing (40% progress)
-            self._update_ui_safe("Processing data...", 0.3)
+            self._update_ui_safe("Processing data...")
+            print("DEBUG: Creating Data Dict - from {workflow_manager.process_data}")
             if params["io_points"] or params["vfd_points"] or params["preset_graphs"]:
                 processed_data = self.workflow_manager.process_data(
                     params["io_points"],
                     params["vfd_points"],
                     params["preset_graphs"],
                 )
-                self._update_ui_safe("Data processed...", 0.4)
+                self._update_ui_safe("Data processed...")
             else:
-                self._update_ui_safe("No points or graphs selected for plotting.", 0)
+                self._update_ui_safe("No points or graphs selected for plotting.")
                 self.main_window.enable_graphing_btns()
+                self.stop_progress_bar()
                 return
 
             # Stage 3: Generate CSV (optional 60% progess)
             if params["include_csv"] is True:
-                self._update_ui_safe("Generating CSV File...", 0.5)
+                print("DEBUG: Generating CSV File - from {workflow_manager.gernate_csv}")
+                self._update_ui_safe("Generating CSV File...")
                 self.workflow_manager.generate_csv(processed_data)
-                self._update_ui_safe("CSV Generated", 0.6)
+                self._update_ui_safe("CSV Generated")
 
             # Stage 4: Graph data to Bokeh plots (80% progress)
-            self._update_ui_safe("Creating plots...", 0.7)
+            self._update_ui_safe("Creating plots...")
+            print("DEBUG: Generating Graphs - from {workflow_manager.generate_graphs}")
             self.workflow_manager.generate_graphs(
                 processed_data, params["jna_current_limit"], params["cutter_amp_limit"]
             )
-            self._update_ui_safe("Plots generated...", 0.8)
+            self._update_ui_safe("Plots generated...")
 
             # Stage 5: Clean up directory (100% progress)
-            self._update_ui_safe("Cleaning directory...", 0.9)
+            self._update_ui_safe("Cleaning directory...")
             cleanup_data_directory()
-            self._update_ui_safe("Task complete.", 1)
+            self._update_ui_safe("Task complete.")
+            print("DEBUG: Background Tasks Complete - from {application_controller._generate_graphs_background}")
 
             # Re-enable graphing buttons
             self.main_window.enable_graphing_btns()
+            self.stop_progress_bar()
 
         except Exception as e:
-            self._update_ui_safe(f"An error occured when generating graphs: {e}", 0)
+            self.stop_progress_bar()
+            self._update_ui_safe(f"An error occured when generating graphs: {e}")
 
     def _populate_incidents_background(self, params: dict) -> None:
         """Background thread for incident population."""
 
         # Check if file has previously been created
+        self.start_progress_bar()
         if self.merged_file is None:
-            # Stage 1: File loading (20% progress)
-            self._update_ui_safe("Loading files...", 0.1)
-            self.merged_file = self.workflow_manager.load_files(params["files"])
-
-            self.workflow_manager.set_time_zone_offset(None)
+            self.stop_progress_bar()
+            self._update_ui_safe("No files selected on Home screen.")
+            self.main_window.enable_incident_population()
+            return
 
         self.file_ready_event.set()
 
         # Check if text dictionary exists
         if get_xml_file() is not None:
 
-            self._update_ui_safe("Processing incidents...", 0.4)
+            self._update_ui_safe("Processing incidents...")
             # Stage 2: Proccess incidents in DB
+            print("DEBUG: Adding Incidents to the Incident Manager - from {workflow_manager.process_incdients}")
             incidents = self.workflow_manager.process_incidents()
 
-            self._update_ui_safe("Rendering incidents...", 0.7)
+            self._update_ui_safe("Rendering incidents...")
+            print("DEBUG: Rendering Incidents - from {incident_viewer.populate_incidents}")
             # Stage 3: Pass incidents to component for rendering
             params["incident_viewer"].populate_incidents(incidents)
 
-            self._update_ui_safe("Population complete.", 1)
+            self._update_ui_safe("Population complete.")
+            print("DEBUG: Background Tasks Complete - from {application_controller._populate_incidents_background}")
+
+
+            # Enable export button
+            params["export_button"].configure(state="normal")
+            self.stop_progress_bar()
 
         else:  # No text dictionary was found
-            self._update_ui_safe("Data download did not contain a text dictionary", 0.0)
+            self.stop_progress_bar()
+            self._update_ui_safe("Data download did not contain a text dictionary")
 
     def _populate_report_background(self, params: dict) -> None:
         """Background thread for report population."""
@@ -312,7 +381,22 @@ class ApplicationController:
 
         self.workflow_manager.populate_report(params)
 
-    def _update_ui_safe(self, message: str, progress: float) -> None:
+    def _export_incidents_background(self) -> None:
+        """Background thread for exporting incidents."""
+        self._update_ui_safe("exporting to csv file...")
+        self.workflow_manager.export_incidents()
+        self._update_ui_safe("Export Complete")
+
+    def start_progress_bar(self) -> None:
+        """Turn on the progress bar and set to intermediate mode."""
+
+        self.main_window.components["footer"]["progress"].configure(mode="indeterminate", indeterminate_speed=0.5)
+        self.main_window.components["footer"]["progress"].start()
+
+    def stop_progress_bar(self) -> None:
+        self.main_window.components["footer"]["progress"].stop()
+
+    def _update_ui_safe(self, message: str) -> None:
         """
         Safely update UI from background thread.
 
@@ -323,7 +407,6 @@ class ApplicationController:
 
         def update():
             self.main_window.update_status(message)
-            self.main_window.update_progress(progress)
 
         self.main_window.root.after(0, update)
 

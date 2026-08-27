@@ -1,10 +1,13 @@
 """Incident viewer component."""
 
+import math
 import customtkinter as ctk
+import tkinter as tk
+from tkinter import simpledialog
 from typing import Callable, List, Dict
 
 
-from config.ui_config import UI_PADDING, UI_COLORS
+from config.ui_config import UI_PADDING, UI_COLORS, INCIDENTS_PER_PAGE, UI_FONTS
 
 
 class IncidentViewer(ctk.CTkFrame):
@@ -15,6 +18,7 @@ class IncidentViewer(ctk.CTkFrame):
         self.callbacks = {}
         self.incident_listbox = None
         self.all_incidents = []
+        self.current_display_list = []
         self.search_box = None
         self.search_var = None
         self.current_search_results = []  # Matching incidents for occurence search
@@ -24,8 +28,9 @@ class IncidentViewer(ctk.CTkFrame):
         self.search_delay = 300  # Milliseconds
         self.widget_pool = []
         self.active_widgets = []
-        self.max_pool_size = 100
         self.search_index = {}
+        self.page_number = 1
+        self.total_pages = 1
         self.setup_component()
 
     def setup_component(self) -> None:
@@ -56,7 +61,8 @@ class IncidentViewer(ctk.CTkFrame):
         )
 
         # Frame for incidents
-        self.incident_listbox = ctk.CTkScrollableFrame(self)
+        self.incident_listbox = ctk.CTkFrame(self)
+        self.incident_listbox.propagate(False)
         self.incident_listbox.grid(
             row=1,
             column=0,
@@ -65,8 +71,133 @@ class IncidentViewer(ctk.CTkFrame):
             pady=UI_PADDING["small"],
         )
 
-        if self.search_mode == "occurrence":
-            self.search_box.bind("<Return>", self.on_search_enter)
+        # Navigation Buttons Panel
+        self.nav_panel = ctk.CTkFrame(self)
+        self.nav_panel.grid(
+            row=2,
+            column=0,
+            sticky="nsew",
+            padx=UI_PADDING["small"],
+            pady=UI_PADDING["small"],
+        )
+
+        self.page_number_text = ctk.CTkLabel(
+            self.nav_panel,
+            text=f"Page Number: {self.page_number}/{self.total_pages}",
+            font=ctk.CTkFont(family="Inter", size=UI_FONTS["status"], weight="bold"),
+        )
+        self.page_number_text.pack(
+            side = ctk.LEFT,
+            padx=UI_PADDING["small"],
+            pady=UI_PADDING["small"],
+        )
+
+        # Next navigation button
+        self.next_btn = ctk.CTkButton(
+            self.nav_panel,
+            text="Next",
+            font=ctk.CTkFont(family="Inter", size=18, weight="bold"),
+            fg_color=UI_COLORS["next"],
+            hover_color=UI_COLORS["next_hover"],
+            command=self.jump_to_next_page
+        )
+        self.next_btn.pack(
+            side = ctk.RIGHT,
+            padx=UI_PADDING["small"],
+            pady=UI_PADDING["small"],
+        )
+
+        # Prev navigation button
+        self.prev_btn = ctk.CTkButton(
+            self.nav_panel,
+            text="Previous",
+            font=ctk.CTkFont(family="Inter", size=18, weight="bold"),
+            fg_color=UI_COLORS["prev"],
+            hover_color=UI_COLORS["prev_hover"],
+            command=self.jump_to_prev_page
+        )
+        self.prev_btn.pack(
+            side = ctk.RIGHT,
+            padx=UI_PADDING["small"],
+            pady=UI_PADDING["small"],
+        )
+
+        # Jump to page button
+        self.jump_to_page_btn = ctk.CTkButton(
+            self.nav_panel,
+            text="Jump",
+            font=ctk.CTkFont(family="Inter", size=18, weight="bold"),
+            fg_color=UI_COLORS["jump"],
+            hover_color=UI_COLORS["jump_hover"],
+            command=self.ask_page_number
+        )
+        self.jump_to_page_btn.pack(
+            side = ctk.RIGHT,
+            padx=UI_PADDING["small"],
+            pady=UI_PADDING["small"],
+        )
+
+    def jump_to_next_page(self) -> None:
+        """Jump to the next page of incidents."""
+        if self.is_valid_page_number(self.page_number + 1):
+            self.page_number += 1
+            self.page_number_text.configure(text=f"Page Number: {self.page_number}/{self.total_pages}")
+            self.render_incidents(self.current_display_list)
+
+    def jump_to_prev_page(self) -> None:
+        """Jump to the prev page of incidents."""
+        if self.page_number > 1:
+            self.page_number -= 1
+            self.page_number_text.configure(text=f"Page Number: {self.page_number}/{self.total_pages}")
+            self.render_incidents(self.current_display_list)
+
+    def ask_page_number(self) -> None:
+        """Asks user to type in a specific page number, then jumps to it."""
+        temp_root = tk.Tk()
+        temp_root.withdraw()
+        page_number = None
+
+        try:
+            page_number = simpledialog.askinteger(
+                "Jump to Page",
+                "Enter Page Number:\n"
+                "",
+                minvalue=1,
+                maxvalue=self.total_pages,
+                parent=temp_root,
+            )
+        except Exception:
+            pass
+
+        temp_root.destroy()
+        if page_number is not None:
+            self.jump_to_page_number(page_number)
+
+    def jump_to_page_number(self, page_number: int) -> None:
+        """Jump to a specific page_number."""
+        if not self.is_valid_page_number(page_number):
+            return
+        self.page_number = page_number
+        self.page_number_text.configure(text=f"Page Number: {self.page_number}/{self.total_pages}")
+        self.render_incidents(self.current_display_list)
+
+    def is_valid_page_number(self, page_number) -> bool:
+        """Validate page_number."""
+        return 1 <= page_number <= math.ceil(len(self.current_display_list) / INCIDENTS_PER_PAGE)
+    
+    def get_page_number_from_index(self, index: int) -> int:
+        """Returns the page number that an index of an incident lives on."""
+
+        return (index // INCIDENTS_PER_PAGE) + 1
+
+    def reset_page_number(self) -> None:
+        """Resets page number back to page 1."""
+        self.page_number = 1
+        self.page_number_text.configure(text=f"Page Number: {self.page_number}/{self.total_pages}")
+
+    def get_page_number(self) -> int:
+        """Get page number."""
+        return self.page_number
 
     def get_search_box(self) -> ctk.CTkEntry:
         """Get the components search box."""
@@ -78,7 +209,7 @@ class IncidentViewer(ctk.CTkFrame):
 
     def populate_incidents(self, incidents: List[Dict]) -> None:
         """
-        Populate the viewer with all incidents.
+        Populate the viewer with INCIDENTS_PER_PAGE num of incidents.
 
         Parameters:
             incidents (List[Dict]): All incidents
@@ -86,10 +217,20 @@ class IncidentViewer(ctk.CTkFrame):
 
         # Store all incidents
         self.all_incidents = incidents
+        self.current_display_list = incidents
+
+        # Setup Total Pages:
+        #-------------------
+        if len(incidents) % INCIDENTS_PER_PAGE == 0:
+            self.total_pages = len(incidents) // INCIDENTS_PER_PAGE
+        else:
+            self.total_pages = (len(incidents) // INCIDENTS_PER_PAGE) + 1
+
+        self.page_number_text.configure(text=f"Page Number: {self.page_number}/{self.total_pages}")
 
         self.build_search_index()
 
-        # Rener all incidents initially
+        # Render INCIDENTS_PER_PAGE number of incidents
         self.render_incidents(incidents)
 
     def build_search_index(self) -> None:
@@ -99,7 +240,7 @@ class IncidentViewer(ctk.CTkFrame):
         for i, incident in enumerate(self.all_incidents):
             # Combine searchable text
             searchable_text = (
-                f"{incident.get("text", "")} {incident.get("timestamp", "")}".lower()
+                f"{incident.get('text', '')} {incident.get('timestamp', '')}".lower()
             )
 
             words = searchable_text.split()
@@ -142,32 +283,27 @@ class IncidentViewer(ctk.CTkFrame):
 
         return sorted(list(matching_incidents or set()))
 
-    def render_incidents(self, incidents_to_show: List[Dict]) -> None:
+    def render_incidents(self, incidents: List[Dict]) -> None:
         """
         Render the specified incidents in the listbox.
 
         Parameters:
-            incidents_to_show (List[Dict]): Incidents to display
+            incidents (List[Dict]): Incidents to display
         """
 
-        # Hide widgets
         for widget in self.active_widgets:
             widget.pack_forget()
 
-        # Return widgets to pool
         self.widget_pool.extend(self.active_widgets)
-        self.active_widgets = []
+        self.active_widgets.clear()
 
-        while len(self.widget_pool) > self.max_pool_size:
-            widget = self.widget_pool.pop(0)
-            widget.destroy()
-
-        # Render filtered incidents
-        for render_index, incident in enumerate(incidents_to_show):
-
+        index = INCIDENTS_PER_PAGE * (self.page_number - 1)
+        
+        while index < (INCIDENTS_PER_PAGE * self.page_number) and index < len(incidents):
             incident_row = self.get_or_create_incident_widget()
-            self.configure_incident_widget(incident_row, incident, render_index)
+            self.configure_incident_widget(incident_row, incidents[index], index)
             self.active_widgets.append(incident_row)
+            index += 1
 
     def get_or_create_incident_widget(self):
         """Get widget from pool or create a new one."""
@@ -252,13 +388,18 @@ class IncidentViewer(ctk.CTkFrame):
         self.search_timer = self.after(self.search_delay, self.execute_search)
 
     def execute_search(self) -> None:
-        """Execute the actual search after delay."""
+        """Execute a search after delay."""
         search_text = self.search_var.get().lower().strip()
 
+        # Reset to first page when filtering
+        self.page_number = 1
+        self.page_number_text.configure(text=f"Page Number: {self.page_number}/{self.total_pages}")
+
+
         if not search_text:
-            if self.search_mode == "text":
-                # Show all incidents if search is empty
-                self.render_incidents(self.all_incidents)
+            # Show all incidents if search is empty
+            self.current_display_list = self.all_incidents
+            self.render_incidents(self.all_incidents)
             self.current_search_results = []
             self.current_occurrence_index = 0
             return
@@ -271,6 +412,7 @@ class IncidentViewer(ctk.CTkFrame):
             # Text filtering mode = show only matching incidents
             filtered_incidents = [self.all_incidents[i] for i in matching_indices]
             # Re-render with filtered incidents
+            self.current_display_list = filtered_incidents
             self.render_incidents(filtered_incidents)
 
         elif self.search_mode == "occurrence":
@@ -278,15 +420,14 @@ class IncidentViewer(ctk.CTkFrame):
             self.current_search_results = matching_indices
             self.current_occurrence_index = 0
 
-            # Only re-render if not already showing all incidents
-            if len(self.active_widgets) != len(self.all_incidents):
-                self.render_incidents(self.all_incidents)
+            self.current_display_list = self.all_incidents
+            self.render_incidents(self.all_incidents)
 
             # Highlight first occurrence
             if self.current_search_results:
                 self.update_highlighting(-1, 0)
                 incident_index = self.current_search_results[0]
-                self.after(10, lambda: self.scroll_to_incident(incident_index))
+                self.after(10, lambda: self.jump_to_incident(incident_index))
 
     def jump_to_occurrence(self, occurrence_index: int) -> None:
         """Jump to specific occurrence."""
@@ -303,8 +444,9 @@ class IncidentViewer(ctk.CTkFrame):
 
         incident_index = self.current_search_results[occurrence_index]
 
-        # Scroll to the incident
-        self.after(10, lambda: self.scroll_to_incident(incident_index))
+        # Jump to the incident
+        self.after(10, lambda: self.jump_to_incident(incident_index))
+
 
     def on_search_enter(self, event) -> None:
         """Handle Enter key in search box - jump to next occurrence."""
@@ -315,36 +457,16 @@ class IncidentViewer(ctk.CTkFrame):
             )
             self.jump_to_occurrence(next_index)
 
-    def scroll_to_incident(self, incident_index: int) -> None:
-        """Scroll to specific incident by index."""
+    def jump_to_incident(self, incident_index: int) -> None:
+        """Jump to a specific page with a specific incident."""
 
-        if incident_index >= len(self.active_widgets):
+        page_number = self.get_page_number_from_index(incident_index)
+
+        if not self.is_valid_page_number(page_number):
             return
+        
+        self.jump_to_page_number(page_number)
 
-        try:
-            target_widget = self.active_widgets[incident_index]
-
-            # Force update to get accurate positions
-            target_widget.update_idletasks()
-
-            widget_y = target_widget.winfo_y()
-            widget_height = target_widget.winfo_height()
-
-            if hasattr(self.incident_listbox, "_parent_canvas"):
-                canvas = self.incident_listbox._parent_canvas
-                canvas_height = canvas.winfo_height()
-                total_height = self.incident_listbox.winfo_reqheight()
-
-                if total_height > canvas_height:
-                    # Center the widget in view
-                    center_y = widget_y + (widget_height / 2) - (canvas_height / 2)
-                    scroll_fraction = center_y / (total_height - canvas_height)
-                    scroll_fraction = max(0, min(1, scroll_fraction))
-
-                    canvas.yview_moveto(scroll_fraction)
-
-        except Exception as e:
-            pass
 
     def set_search_mode(self, mode: str) -> None:
         """Set the search mode ('text' or 'occurrence')"""
@@ -367,6 +489,10 @@ class IncidentViewer(ctk.CTkFrame):
         Parameters:
             help_text (str): Help text to display
         """
+
+        if not help_text:
+            return None
+
         # Create the modal dialog window
         help_dialog = ctk.CTkToplevel(self)
         help_dialog.title("Incident Help")
@@ -416,17 +542,24 @@ class IncidentViewer(ctk.CTkFrame):
 
     def update_highlighting(self, old_index: int, new_index: int) -> None:
         """Update highlighting without re-render."""
+        page_start = INCIDENTS_PER_PAGE * (self.page_number - 1)
+        page_end = page_start + INCIDENTS_PER_PAGE
+
         # Remove old highlight
         if old_index >= 0 and old_index < len(self.current_search_results):
             old_incident_idx = self.current_search_results[old_index]
-            if old_incident_idx < len(self.active_widgets):
-                self.active_widgets[old_incident_idx].configure(fg_color="transparent")
+            if page_start <= old_incident_idx < page_end:
+                widget_index = old_incident_idx - page_start
+                if widget_index < len(self.active_widgets):
+                    self.active_widgets[widget_index].configure(fg_color="transparent")
 
         # Add new highlight
         if new_index >= 0 and new_index < len(self.current_search_results):
             new_incident_idx = self.current_search_results[new_index]
-            if new_incident_idx < len(self.active_widgets):
-                self.active_widgets[new_incident_idx].configure(fg_color="yellow")
+            if page_start <= new_incident_idx < page_end:
+                widget_index = new_incident_idx - page_start
+                if widget_index < len(self.active_widgets):
+                    self.active_widgets[widget_index].configure(fg_color="yellow")
 
     def clear_incidents(self) -> None:
         """Clear all incidents from the viewer."""
@@ -436,6 +569,7 @@ class IncidentViewer(ctk.CTkFrame):
 
         # Clear stored data
         self.all_incidents = []
+        self.current_display_list = []
         self.current_search_results = []
         self.current_occurrence_index = 0
 

@@ -2,9 +2,10 @@
 
 import customtkinter as ctk
 from typing import Callable, List, Dict
+from ui.components.selected import Selected
 
 from config.point_mapping import GRAPH_PRESETS
-from config.ui_config import UI_FONTS, UI_PADDING, UI_COLORS
+from config.ui_config import UI_PADDING, UI_COLORS
 
 
 class PresetGraph(ctk.CTkFrame):
@@ -22,7 +23,7 @@ class PresetGraph(ctk.CTkFrame):
         """Setup the preset graph selection interface."""
 
         # Create a frame for preset buttons
-        componenet_listbox = ctk.CTkScrollableFrame(self)
+        componenet_listbox = ctk.CTkScrollableFrame(self, fg_color=UI_COLORS["frame"])
         componenet_listbox.pack(
             fill="both",
             expand=True,
@@ -33,7 +34,6 @@ class PresetGraph(ctk.CTkFrame):
         componenet_listbox.grid_columnconfigure(1, weight=1)
 
         row = 0
-        col = 0
 
         # Create checkbox to select all presets
         all_presets_var = ctk.StringVar(value="off")
@@ -49,6 +49,7 @@ class PresetGraph(ctk.CTkFrame):
             variable=all_presets_var,
             onvalue="on",
             offvalue="off",
+            command=lambda k="All": self.on_all_toggle(k),
             fg_color=UI_COLORS["checkbox"],
             hover_color=UI_COLORS["checkbox_hover"],
             corner_radius=3,
@@ -57,14 +58,14 @@ class PresetGraph(ctk.CTkFrame):
         )
         all_presets_checkbox.grid(
             row=row,
-            column=col,
+            column=0,
             padx=UI_PADDING["small"],
             pady=UI_PADDING["small"],
             sticky="ew",
         )
-        col += 1
 
         self.checkboxes.append(all_presets_checkbox)
+        row += 1
 
         # Populate frame with presets
         for key, value in GRAPH_PRESETS.items():
@@ -82,6 +83,7 @@ class PresetGraph(ctk.CTkFrame):
                 variable=preset_var,
                 onvalue="on",
                 offvalue="off",
+                command=lambda k=key: self.on_preset_toggle(k),
                 fg_color=UI_COLORS["checkbox"],
                 hover_color=UI_COLORS["checkbox_hover"],
                 corner_radius=3,
@@ -90,7 +92,7 @@ class PresetGraph(ctk.CTkFrame):
             )
             preset_checkbox.grid(
                 row=row,
-                column=col,
+                column=0,
                 padx=UI_PADDING["small"],
                 pady=UI_PADDING["small"],
                 sticky="ew",
@@ -98,20 +100,45 @@ class PresetGraph(ctk.CTkFrame):
 
             self.checkboxes.append(preset_checkbox)
 
-            # Move to next column, wrap to next row after 3 columns
-            col += 1
-            if col >= 2:
-                col = 0
-                row += 1
+            row += 1
+
+    def on_preset_toggle(self, key: str) -> None:
+        if self.state[key].get() == "on":
+            Selected.add_preset(key)
+        else:
+            Selected.remove_preset(key)
+
+    def on_all_toggle(self, all_key: str) -> None:
+
+        for i, key in enumerate(self.state):
+            if self.state[all_key].get() == "on":
+                if key != "All": 
+                    if self.state[key].get() == "on":
+                        self.state[key].set("off")
+                    else:
+                        Selected.add_preset(key)
+                    self.checkboxes[i].configure(state="disabled")
+            else:
+                if key != "All":
+                    Selected.remove_preset(key)
+                    self.checkboxes[i].configure(state="normal")
 
     def clear(self) -> None:
         """Clear all selected checboxes."""
 
+        if self.state["All"].get() == "on":
+            self.state["All"].set("off")
+            self.on_all_toggle("All")
+            if "cleared_graph_presets" in self.callbacks:
+                self.callbacks["cleared_graph_presets"](len(self.state) - 1)
+            return
+
         count = 0
 
-        for var in self.state.values():
+        for key, var in self.state.items():
             if var.get() == "on":
                 count += 1
+                Selected.remove_preset(key)
             var.set("off")
 
         if "cleared_graph_presets" in self.callbacks:

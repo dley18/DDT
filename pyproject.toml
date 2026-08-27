@@ -10,5 +10,5 @@ dependencies = [
     "customtkinter>=5.2.2",
     "lz4>=4.4.4",
     "pillow>=11.3.0",
-    "pyinstaller>=6.16.0",
+    "pyinstaller>=6.19.0",
 ]

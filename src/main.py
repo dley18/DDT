@@ -1,11 +1,11 @@
 """
 DDT (Data Download Tool) - Main Entry Point
 
-A data analysis application for Longwall Shearer data downloads.
+A data analysis application for Longwall Shearer data dumps.
 
 
 Author: Dane Ley
-Version: 2.0
+Version: 2.3
 """
 
 import sys, os
@@ -39,19 +39,18 @@ def _setup_console_for_pyinstaller():
 
 def main():
     """Main entry point for DDT"""
-    print("DEBUG: Starting main()")
+    print("DEBUG: Starting DDT - from {main.main}")
 
     # Fix PyInstaller console issues BEFORE importing anything
     _setup_console_for_pyinstaller()
-    print("DEBUG: Console setup complete")
+    print("DEBUG: Console setup complete - from {main.main}")
     try:
         from core.application_controller import run_application
 
-        print("DEBUG: Import successful, calling run_application()")
         run_application()
-        print("DEBUG: run_application() completed")
+        print("DEBUG: DDT Exited - from {main.main}")
     except Exception as e:
-        print(f"DEBUG: Exception in main(): {e}")
+        print(f"DEBUG: Exception in main: {e}")
         import traceback
 
         traceback.print_exc()

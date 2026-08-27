@@ -1,4 +1,4 @@
-"""Database operations and logic"""
+"""Database operations"""
 
 import json
 import sqlite3
@@ -11,9 +11,11 @@ from config.point_mapping import IO_TYPES, VFD_POINTS
 
 
 class DatabaseManager:
-    """Handles database connections and operations."""
+    """Handles database connections, operations, and queries."""
 
-    def __init__(self, database_path: Optional[str] = None):
+    db_version = None
+
+    def __init__(self, _database_path: Optional[str] = None):
         """
         Initialize DatabaseManager.
 
@@ -21,11 +23,7 @@ class DatabaseManager:
             database_path (str, optional): Path to database file.
                                          Defaults to merged_db.sqlite in DATA_FOLDER_PATH
         """
-        if database_path is None:
-            self.database_path = os.path.join(DATA_FOLDER_PATH, "merged_db.sqlite")
-        else:
-            self.database_path = database_path
-
+        self.database_path = _database_path or os.path.join(DATA_FOLDER_PATH, "merged_db.sqlite")
         self._connection = None
 
     @contextmanager
@@ -39,6 +37,7 @@ class DatabaseManager:
         """
         connection = None
         try:
+
             connection = sqlite3.connect(self.database_path)
             connection.row_factory = sqlite3.Row  # Enable column access by name
             yield connection
@@ -50,7 +49,52 @@ class DatabaseManager:
             if connection:
                 connection.close()
 
-    def get_io_point_info(self, name: str) -> dict:
+    @staticmethod
+    def get_database_version() -> str | None:
+        """
+        Get the database version.
+
+        Returns:
+            str: "1" or "2"
+        """
+        return DatabaseManager.db_version
+
+    @staticmethod
+    def set_database_version(version: str) -> None:
+        """
+        Set the database version
+
+        Parameters:
+            version (str): version number - "1" or "2"
+        """
+        if version == "1" or version == "2":
+            DatabaseManager.db_version = version
+
+    def get_all_io_points(self) -> List[dict[str, Any]]:
+        """
+        Retrieve ioName, ioId, ioType, and active for all io points in the IOConfig Table.
+        """
+        if DatabaseManager.db_version == "1":
+            query = """
+                    SELECT DISTINCT
+                        json_extract(rti_json_sample, '$.ioName') as name,
+                        json_extract(rti_json_sample, '$.ioId') as id,
+                        json_extract(rti_json_sample, '$.ioType') as type,
+                        json_extract(rti_json_sample, '$.active') as active
+                    FROM "IOConfig@0"
+                    """
+        else:
+            query = """
+                    SELECT DISTINCT
+                        ioName as name,
+                        ioId as id,
+                        ioType as type,
+                        active as active
+                    FROM "IOConfig"
+                    """
+        return self.execute_custom_query(query)
+
+    def get_io_point_info(self, name: str, io_type: str) -> dict:
         """
         Retrieve ioid, iotype, ioname, and active from IOConfig.
 
@@ -61,16 +105,26 @@ class DatabaseManager:
             dict: Dictionary containing io point info
         """
         # Extract the JSON fields
-        query = """
-                SELECT 
-                    json_extract(rti_json_sample, '$.ioId') as io_id,
-                    json_extract(rti_json_sample, '$.ioType') as io_type,
-                    json_extract(rti_json_sample, '$.active') as active
-                FROM "IOConfig@0"
-                WHERE json_extract(rti_json_sample, '$.ioName') = ?
-                """
+        if DatabaseManager.db_version == "1":
+            query = """
+                    SELECT 
+                        json_extract(rti_json_sample, '$.ioId') as io_id,
+                        json_extract(rti_json_sample, '$.active') as active
+                    FROM "IOConfig@0"
+                    WHERE json_extract(rti_json_sample, '$.ioName') = ?
+                      AND json_extract(rti_json_sample, '$.ioType') = ?
+                    """
+        else:
+            query = """
+                    SELECT
+                        ioId as io_id,
+                        active as active
+                    FROM "IOConfig"
+                    WHERE ioName = ?
+                      AND ioType = ?
+                    """
 
-        result = self.execute_custom_query(query, (name,))
+        result = self.execute_custom_query(query, (name, io_type))
         return result[0] if result else {}
 
     def get_io_point_value(self, io_id: str, io_type: str) -> List:
@@ -84,17 +138,97 @@ class DatabaseManager:
         Returns:
             List: List of dictionaries containing the time and value
         """
-        base_query = """
-                    SELECT 
+        # Re route query for node status table
+        if str(io_type) == "12" or str(io_type) == "J_NDSTAT_TYPE":
+            return self.get_comms_value(io_id)
+        elif str(io_type) == "4" or str(io_type) == "J_PVO_TYPE":
+            return self.get_prop_value(io_id, "out")
+        elif str(io_type) == "3" or str(io_type) == "J_PVI_TYPE":
+            return self.get_prop_value(io_id, "in")
+
+        if DatabaseManager.db_version == "1":
+            query = """
+                    SELECT
                         SampleInfo_source_timestamp as timestamp,
                         json_extract(rti_json_sample, '$.value') as value
                     FROM "{}"
                     WHERE json_extract(rti_json_sample, '$.ioId') = ?
-                    """.format(
-            IO_TYPES[io_type]
-        )
+                    ORDER BY SampleInfo_source_timestamp
+                    """
+        else:
+            query = """
+                    SELECT
+                        recorded_timestamp as timestamp,
+                        value as value
+                    FROM "{}"
+                    WHERE ioId = ?
+                    ORDER BY recorded_timestamp
+                    """
+        return self.execute_custom_query(query.format(IO_TYPES[str(io_type)]), (int(io_id),))
 
-        query = base_query + " ORDER BY SampleInfo_source_timestamp"
+    def get_comms_value(self, io_id: str) -> List:
+        """
+        Retrieves comms values for io points.
+        Note that this is only setup for io points.
+
+        Params:
+            io_id: io id of point
+
+        Returns:
+            List: List of dictionaries containing the time and value
+        """
+        if DatabaseManager.db_version == "1":
+            query = """
+                    SELECT
+                        SampleInfo_source_timestamp as timestamp,
+                        json_extract(rti_json_sample, '$.devOk') as value
+                    FROM "NodeStatus@0"
+                    WHERE json_extract(rti_json_sample, '$.ioId') = ?
+                    ORDER BY SampleInfo_source_timestamp
+                    """
+        else:
+            query = """
+                    SELECT
+                        recorded_timestamp as timestamp,
+                        devOk as value
+                    FROM "NodeStatus"
+                    WHERE ioId = ?
+                    ORDER BY recorded_timestamp
+                    """
+        return self.execute_custom_query(query, (int(io_id),))
+
+    def get_prop_value(self, io_id: str, table_type: str) -> List:
+        """
+        Retrieves values for PropVOutput and PropVInput Points
+
+        Parameters:
+            io_id (str): io id of point
+            table_type (str): either "in" or "out"
+
+        Returns:
+            List: List of dictionaries containing the time and value
+        """
+        value_name = "pctFlow" if table_type == "out" else "pinVoltage" # Note that PropVInput points will rarely be selected if ever, so this will probably never happen
+        if DatabaseManager.db_version == "1":
+            table_name = "PropVInput@0" if table_type == "in" else "PropVOutput@0"
+            query = """
+                    SELECT
+                        SampleInfo_source_timestamp as timestamp,
+                        json_extract(rti_json_sample, '$.value.{}') as value
+                    FROM "{}"
+                    WHERE json_extract(rti_json_sample, '$.ioId') = ?
+                    ORDER BY SampleInfo_source_timestamp
+                    """.format(value_name, table_name)
+        else:
+            table_name = "PropVInput" if table_type == "in" else "PropVOutput"
+            query = """
+                    SELECT
+                        recorded_timestamp as timestamp,
+                        {} as value
+                    FROM "{}"
+                    WHERE ioId = ?
+                    ORDER BY recorded_timestamp
+                    """.format(value_name, table_name)
         return self.execute_custom_query(query, (int(io_id),))
 
     def get_vfd_point_info(self, name: str) -> dict:
@@ -107,13 +241,24 @@ class DatabaseManager:
         Returns:
             dict: Dictionary containing vfd point info
         """
-        query = """
-                SELECT 
-                    json_extract(rti_json_sample, '$.vfdId') as vfd_id,
-                    json_extract(rti_json_sample, '$.active') as active
-                FROM "VFDConfig@0"
-                WHERE json_extract(rti_json_sample, '$.vfdName') = ?
-                """
+        if DatabaseManager.db_version == "1":
+
+            query = """
+                    SELECT 
+                        json_extract(rti_json_sample, '$.vfdId') as vfd_id,
+                        json_extract(rti_json_sample, '$.active') as active
+                    FROM "VFDConfig@0"
+                    WHERE json_extract(rti_json_sample, '$.vfdName') = ?
+                    """
+        else:
+            query = """
+                    SELECT
+                        vfdId as vfd_id,
+                        active as active
+                    FROM "VFDConfig"
+                    WHERE vfdName = ?
+                    """
+
         result = self.execute_custom_query(query, (VFD_POINTS[name]["name"],))
         return result[0] if result else {}
 
@@ -128,17 +273,26 @@ class DatabaseManager:
         Returns:
             List: List of dictionaries containing the time and value
         """
-        base_query = """
+        if DatabaseManager.db_version == "1":
+            query = """
+                        SELECT
+                            SampleInfo_source_timestamp as timestamp,
+                            json_extract(rti_json_sample, '$.{}') as value
+                        FROM "VFDInfo@0"
+                        WHERE json_extract(rti_json_sample, '$.vfdId') = ?
+                        ORDER BY SampleInfo_source_timestamp
+                        """
+        else:
+            query = """
                     SELECT
-                        SampleInfo_source_timestamp as timestamp,
-                        json_extract(rti_json_sample, '$.{}') as value
-                    FROM "VFDInfo@0"
-                    WHERE json_extract(rti_json_sample, '$.vfdId') = ?
-                    """.format(
-            vfd_type
-        )
-        query = base_query + " ORDER BY SampleInfo_source_timestamp"
-        return self.execute_custom_query(query, (int(vfd_id),))
+                        recorded_timestamp as timestamp,
+                        {} as value
+                    FROM "VFDInfo"
+                    WHERE vfdId = ?
+                    ORDER BY recorded_timestamp
+                    """
+
+        return self.execute_custom_query(query.format(vfd_type), (int(vfd_id),))
 
     def get_all_incidents(self) -> List:
         """
@@ -148,17 +302,30 @@ class DatabaseManager:
             List: List of dictionaries containing: (timestamp, tidx, type, state, and args)
         """
 
-        query = """
-                SELECT
-                    SampleInfo_source_timestamp as timestamp,
-                    json_extract(rti_json_sample, '$.incidentTidx') as tidx,
-                    json_extract(rti_json_sample, '$.helpTidx') as help_tidx,
-                    json_extract(rti_json_sample, '$.type') as type,
-                    json_extract(rti_json_sample, '$.state') as state,
-                    json_extract(rti_json_sample, '$.args') as args
-                FROM "IncidentAll@0"
-                ORDER BY SampleInfo_source_timestamp
-                """
+        if DatabaseManager.db_version == "1":
+            query = """
+                    SELECT
+                        SampleInfo_source_timestamp as timestamp,
+                        json_extract(rti_json_sample, '$.incidentTidx') as tidx,
+                        json_extract(rti_json_sample, '$.helpTidx') as help_tidx,
+                        json_extract(rti_json_sample, '$.type') as type,
+                        json_extract(rti_json_sample, '$.state') as state,
+                        json_extract(rti_json_sample, '$.args') as args
+                    FROM "IncidentAll@0"
+                    ORDER BY SampleInfo_source_timestamp
+                    """
+        else:
+            query = """
+                    SELECT
+                        recorded_timestamp as timestamp,
+                        incidentTidx as tidx,
+                        helpTidx as help_tidx,
+                        type as type,
+                        state as state,
+                        args as args
+                    FROM "IncidentAll"
+                    ORDER BY recorded_timestamp
+                    """
 
         return self.execute_custom_query(query)
 
@@ -172,6 +339,7 @@ class DatabaseManager:
         Returns:
             List: List containg data
         """
+        # Query same for DB Version 1 and 2
         query = """
                 SELECT
                     userId as user_id,
@@ -179,24 +347,40 @@ class DatabaseManager:
                 FROM "fb_users"
                 WHERE userId == ?
                 """
-        return self.execute_custom_query(query, user_id)
+        return self.execute_custom_query(query, (user_id,))
 
-    def get_report_info(self) -> Dict:
+    def get_report_info(self) -> Optional[List[Dict]]:
         """
         Get report info for incident viewer screen.
 
         Returns:
-            Dict: Dictionary containing report info.
+            Optional[Dict]: Dictionary containing report info.
         """
 
-        query = """
-                SELECT
-                    json_extract(rti_json_sample, '$.machineId') as id,
-                    MIN(SampleInfo_source_timestamp) AS first_timestamp,
-                    MAX(SampleInfo_source_timestamp) AS last_timestamp
-                FROM "CCUSync@0"
-                """
-        return self.execute_custom_query(query)
+        if DatabaseManager.db_version == "1":
+            query = """
+                    SELECT
+                        json_extract(rti_json_sample, '$.machineId') as id,
+                        MIN(SampleInfo_source_timestamp) AS first_timestamp,
+                        MAX(SampleInfo_source_timestamp) AS last_timestamp
+                    FROM "CCUSync@0"
+                    WHERE SampleInfo_valid_data = 1
+                    """
+        else:
+            query = """
+                    SELECT
+                        machineId as id,
+                        MIN(recorded_timestamp) as first_timestamp,
+                        MAX(recorded_timestamp) as last_timestamp
+                    FROM "CCUSync"
+                    """
+        try:
+            report_info = self.execute_custom_query(query)
+        except sqlite3.OperationalError as e:
+            print(f"ERROR: {e}")
+            return None
+
+        return report_info
 
     def get_time_zone_offset(self) -> Optional[Dict]:
         """
@@ -205,30 +389,66 @@ class DatabaseManager:
         Returns:
             Optional[Dict]: Dictionary containing offset, or None if not found.
         """
-        query_to_find_tidx = """
+        if DatabaseManager.db_version == "1":
+            tidx_query = """
+                    SELECT
+                        json_extract(rti_json_sample, '$.parNameTidx') as tidx
+                    FROM "ParConfig@0"
+                    WHERE json_extract(rti_json_sample, '$.parName') == "TimeZoneOffset"
+                    ORDER BY SampleInfo_source_timestamp
+                    LIMIT 1
+                    """
+        else:
+            tidx_query = """
+                    SELECT
+                        parNameTidx as tidx
+                    FROM "ParConfig"
+                    WHERE parName = "TimeZoneOffset"
+                    ORDER BY recorded_timestamp
+                    LIMIT 1
+                    """
+        tidx = None
+        try:
+            tidx = self.execute_custom_query(tidx_query)
+        except sqlite3.OperationalError:
+            print("DEBUG: No ParConfig Table")
+
+        if tidx:
+            tidx = tidx[0]["tidx"]
+        else:
+            return None
+
+        if DatabaseManager.db_version == "1":
+            offset_query = """
                             SELECT
-                                json_extract(rti_json_sample, '$.parNameTidx') as tidx
-                            FROM "ParConfig@0"
-                            WHERE json_extract(rti_json_sample, '$.parName') == "TimeZoneOffset"
+                                json_extract(rti_json_sample, '$.value') as value
+                            FROM "ParValue@0"
+                            WHERE json_extract(rti_json_sample, '$.parNameTidx') == ?
                             ORDER BY SampleInfo_source_timestamp
                             LIMIT 1
                             """
-        tidx = self.execute_custom_query(query_to_find_tidx)
-        tidx = tidx[0]["tidx"]
+        else:
+            offset_query = """
+                            SELECT
+                                value as value
+                            FROM "ParValue"
+                            WHERE parNameTidx = ?
+                            ORDER BY recorded_timestamp
+                            LIMIT 1
+                            """
+        offset = None
+        try:
+            offset = self.execute_custom_query(offset_query, (tidx,))
+        except sqlite3.OperationalError:
+            print("DEBUG: No offset found")
 
-        query_to_find_offset = """
-                                SELECT
-                                    json_extract(rti_json_sample, '$.value') as value
-                                from "ParValue@0"
-                                WHERE json_extract(rti_json_sample, '$.parNameTidx') == ?
-                                ORDER BY SampleInfo_source_timestamp
-                                LIMIT 1
-                                """
 
-        offset = self.execute_custom_query(query_to_find_offset, (tidx,))
         if offset:
             offset = offset[0]
-            return json.loads(offset["value"])["longValue"]
+            if self.db_version == "1":
+                return json.loads(offset["value"])["longValue"]
+            else:
+                return offset["value"]
         else:
             return None
 
@@ -377,15 +597,19 @@ class DatabaseManager:
         Raises:
             sqlite3.Error: If database operation fails
         """
-        with self.get_connection() as conn:
-            cursor = conn.cursor()
-            if parameters:
-                cursor.execute(query, parameters)
-            else:
-                cursor.execute(query)
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if parameters:
+                    cursor.execute(query, parameters)
+                else:
+                    cursor.execute(query)
 
-            rows = cursor.fetchall()
-            return [dict(row) for row in rows]
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+        except Exception as e:
+            print(f"ERROR: {e}")
+
 
     def get_data_by_time_range(
         self,

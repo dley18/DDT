@@ -97,3 +97,33 @@ def apply_time_zone_offset_to_report(timestamps: List, offset: int) -> List:
         new_timestamps.append(timestamp)
 
     return new_timestamps
+
+def find_min_max_time(data: Dict) -> tuple:
+    """
+    Given the data dictionary, find the min and max time intervals.
+
+    Parameters:
+        data (dict): Data Dictionary
+
+    Returns:
+        tuple: (min_time, max_time)
+    """
+
+    min_time = None
+    max_time = None
+
+    for point_data in data.values():
+
+        for entry in point_data:
+
+            if min_time is None and max_time is None:
+                min_time = entry["timestamp"]
+                max_time = entry["timestamp"]
+
+            if entry["timestamp"] > max_time:
+                max_time = entry["timestamp"]
+            elif entry["timestamp"] < min_time:
+                min_time = entry["timestamp"]
+            else:
+                pass
+    return convert_timestamp_to_readable(min_time), convert_timestamp_to_readable(max_time)

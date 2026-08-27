@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from typing import Callable, List
 
+from config.ui_config import UI_COLORS
 import customtkinter as ctk
 
 from util.file_util import get_file_size, cleanup_data_directory
@@ -40,7 +41,7 @@ class FileSelector(ctk.CTkFrame):
             container,
             selectmode=tk.EXTENDED,
             font=("Consolas", 20),
-            bg="#2b2b2b",
+            bg=UI_COLORS["frame"],
             fg="#ffffff",
             selectbackground="#1f538d",
             activestyle="none",
@@ -169,15 +170,18 @@ class FileSelector(ctk.CTkFrame):
         if removed_count > 0 and "files_removed" in self.callbacks:
             self.callbacks["files_removed"](removed_count)
 
-    def clear_all_files(self) -> None:
+    def clear_all_files(self, force=False) -> None:
         """Clear all files from the selection."""
         if not self.selected_files:
             messagebox.showinfo("Info", "No files to clear.")
             return
 
-        result = messagebox.askyesno(
-            "Confirm", f"Remove all {len(self.selected_files)} files from the list?"
-        )
+        if not force:
+            result = messagebox.askyesno(
+                "Confirm", f"Remove all {len(self.selected_files)} files from the list?"
+            )
+        else:
+            result = force
 
         if result:
             count = len(self.selected_files)
@@ -186,6 +190,13 @@ class FileSelector(ctk.CTkFrame):
 
             if "files_cleared" in self.callbacks:
                 self.callbacks["files_cleared"](count)
+
+    def open_data_folder(self) -> None:
+        """Open data folder."""
+        os.startfile(DATA_FOLDER_PATH)
+        
+        if "data_folder_opened" in self.callbacks:
+            self.callbacks["data_folder_opened"]()
 
     def delete_database_file(self) -> None:
         """Delete merged database file."""

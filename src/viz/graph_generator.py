@@ -1,6 +1,6 @@
 """Bokeh graph generation module."""
 
-from typing import Dict, List, Any
+from typing import Dict, List
 import datetime
 import os
 
@@ -15,6 +15,7 @@ from bokeh.models import (
     CheckboxGroup,
     Span,
     Label,
+    DatetimeRangeSlider
 )
 from bokeh.layouts import column, row
 from bokeh.io import curdoc
@@ -24,6 +25,7 @@ from bs4 import BeautifulSoup
 from config.chart_config import CHART_COLORS
 from config.constants import DATA_FOLDER_PATH, SCREENSIZE
 from viz.plot_point import PlotPoint
+from util import find_min_max_time
 
 
 class GraphGenerator:
@@ -53,6 +55,7 @@ class GraphGenerator:
         self.custom_css_div = None
         self.checkboxes = None
         self.toggle_symbols_btn = None
+        self.date_range_slider = None
 
     def generate_plots(self):
         """Generate all graphs."""
@@ -62,7 +65,7 @@ class GraphGenerator:
             self._create_single_plot(graph_name, graph_data)
 
     def _create_single_plot(
-        self, plot_name: str, plot_data: Dict[str, List[Dict[str, Any]]]
+        self, plot_name: str, plot_data: Dict[str, List[Dict]]
     ) -> bool:
         """
         Create a bokeh plot.
@@ -90,8 +93,39 @@ class GraphGenerator:
             height=SCREENSIZE[1],
         )
 
+        min_date, max_date = find_min_max_time(plot_data)
+
+        self.date_range_slider = DatetimeRangeSlider(
+            value=(min_date, max_date),
+            start=min_date,
+            end=max_date,
+            step=60_000, # One minute
+            title="Date Range",
+            bar_color="black",
+            tooltips=True,
+        )
+
+        # Callback updates the plot x_range
+        self.date_range_slider.js_on_change(
+            "value",
+            CustomJS(
+                args=dict(x_range=plot.x_range),
+                code="""
+                    // cb_obj.value is [start_ms, end_ms] (numbers)
+                    const v = cb_obj.value;
+                    x_range.start = v[0];
+                    x_range.end = v[1];
+                """,
+            ),
+        )
+
+        graphing_points = []
+
         # Process each points data
         for i, (point_name, time_value_list) in enumerate(plot_data.items()):
+
+            # Used to check if parameter lines need to be added to custom graph
+            graphing_points.append(point_name) if plot_name == "Custom" else None
 
             # Filter data
             x_values, y_values = self._filter_valid_data(time_value_list)
@@ -110,7 +144,7 @@ class GraphGenerator:
             renderers["asterick"][point_name] = plot_point.get_asterick()
 
         # Add features
-        self._add_parameter_lines(plot, plot_name)
+        self._add_parameter_lines(plot, plot_name, graphing_points)
         self._add_interactive_features(plot)
         self._add_toggles(renderers)
         self._apply_styling(plot)
@@ -120,11 +154,27 @@ class GraphGenerator:
         self._modify_html(plot_name)
         self._open_plot(plot_name)
 
-    def _add_parameter_lines(self, plot: figure, plot_name: str):
+    def _add_parameter_lines(self, plot: figure, plot_name: str, point_names: List):
         """Generate a horizontal line on the graph for a parameter."""
 
         # Parameter plots
         parameter_plots = ["Haulage Amps", "Cutter Amps"]
+        jna_points = [
+        "LTramPhaseA",
+        "LTramPhaseB",
+        "LTramPhaseC",
+        "RTramPhaseA",
+        "RTramPhaseB",
+        "RTramPhaseC"
+        ]
+        cutter_points = [
+        "LCutterPhaseA",
+        "LCutterPhaseB",
+        "LCutterPhaseC",
+        "RCutterPhaseA",
+        "RCutterPhaseB",
+        "RCutterPhaseC"
+        ]
 
         if plot_name in parameter_plots:
 
@@ -133,6 +183,15 @@ class GraphGenerator:
 
             if self.cutter_limit is not None and plot_name == "Cutter Amps":
                 self._add_horizontal_line(plot, self.cutter_limit, "Cutter Amp Limit")
+
+        else:
+            for point in point_names:
+
+                if point in jna_points and self.jna_limit is not None:
+                    self._add_horizontal_line(plot, self.jna_limit, "JNA Current Limit")
+
+                if point in cutter_points and self.cutter_limit is not None:
+                    self._add_horizontal_line(plot, self.cutter_limit, "Cutter Amp Limit")
 
     def _add_horizontal_line(self, plot: figure, value: int, label: str):
         """Add a horizontal line to the plot."""
@@ -271,7 +330,7 @@ class GraphGenerator:
     def _save_plot(self, plot: figure, name: str):
         """Save the plot to the output folder."""
         layout = column(
-            self.custom_css_div, plot, row(self.checkboxes, self.toggle_symbols_btn)
+            self.custom_css_div, self.date_range_slider, plot, row(self.checkboxes, self.toggle_symbols_btn)
         )
         output_file(f"{DATA_FOLDER_PATH}/{name}.html")
         save(layout)

@@ -8,7 +8,7 @@ import ctypes
 import customtkinter as ctk
 
 
-from config.constants import APP_TITLE
+from config.constants import APP_TITLE, APP_VERSION
 from config.ui_config import (
     APP_APPEARANCE,
     COMPONENT_DIMENSIONS,
@@ -21,6 +21,8 @@ from ui.components.custom_graph import CustomGraph
 from ui.components.file_selector import FileSelector
 from ui.components.incident_viewer import IncidentViewer
 from ui.components.preset_graph import PresetGraph
+from ui.components.search import Search
+from ui.components.selected import Selected
 from util.file_util import get_path
 
 
@@ -167,12 +169,21 @@ class MainWindow:
         side_bar_frame.grid(row=0, column=0, rowspan=2, sticky="nsew")
 
         side_bar_frame.grid_columnconfigure(0, weight=1)
-        side_bar_frame.grid_rowconfigure(0, weight=1)
+        side_bar_frame.grid_rowconfigure(0, weight=0)
         side_bar_frame.grid_rowconfigure(1, weight=1)
-        side_bar_frame.grid_rowconfigure(2, weight=0)
-        side_bar_frame.grid_rowconfigure(3, weight=1)
-        side_bar_frame.grid_rowconfigure(4, weight=0)
-        side_bar_frame.grid_rowconfigure(5, weight=1)
+        side_bar_frame.grid_rowconfigure(2, weight=1)
+        side_bar_frame.grid_rowconfigure(3, weight=0)
+        side_bar_frame.grid_rowconfigure(4, weight=1)
+        side_bar_frame.grid_rowconfigure(5, weight=0)
+        side_bar_frame.grid_rowconfigure(6, weight=1)
+
+        # App version number
+        version_label = ctk.CTkLabel(
+            side_bar_frame, 
+            text=APP_VERSION,
+            font=ctk.CTkFont(family="Inter", size=18, weight="bold"),
+        )
+        version_label.grid(row=0, column=0, sticky="w", padx=UI_PADDING["small"])
 
         # App logo
         logo = Image.open(get_path(UI_COMPONENTS["ddt_icon"]))
@@ -186,7 +197,7 @@ class MainWindow:
         )
         logo_label = ctk.CTkLabel(side_bar_frame, text="", image=ctk_logo)
         logo_label.grid(
-            row=0,
+            row=1,
             column=0,
             sticky="nsew",
             padx=UI_PADDING["small"],
@@ -204,7 +215,7 @@ class MainWindow:
             corner_radius=0,
         )
         home_btn.grid(
-            row=1,
+            row=2,
             column=0,
             sticky="nsew",
         )
@@ -213,7 +224,7 @@ class MainWindow:
         seperator_frame1 = ctk.CTkFrame(
             side_bar_frame, height=2, fg_color=UI_COLORS["black"]
         )
-        seperator_frame1.grid(row=2, column=0, sticky="ew", padx=UI_PADDING["small"])
+        seperator_frame1.grid(row=3, column=0, sticky="ew", padx=UI_PADDING["small"])
 
         # Graphing button
         graphing_btn = ctk.CTkButton(
@@ -226,7 +237,7 @@ class MainWindow:
             corner_radius=0,
         )
         graphing_btn.grid(
-            row=3,
+            row=4,
             column=0,
             sticky="nsew",
         )
@@ -235,7 +246,7 @@ class MainWindow:
         seperator_frame2 = ctk.CTkFrame(
             side_bar_frame, height=2, fg_color=UI_COLORS["black"]
         )
-        seperator_frame2.grid(row=4, column=0, sticky="ew", padx=UI_PADDING["small"])
+        seperator_frame2.grid(row=5, column=0, sticky="ew", padx=UI_PADDING["small"])
 
         # Incident button
         incident_btn = ctk.CTkButton(
@@ -248,7 +259,7 @@ class MainWindow:
             corner_radius=0,
         )
         incident_btn.grid(
-            row=5,
+            row=6,
             column=0,
             sticky="nsew",
         )
@@ -399,11 +410,30 @@ class MainWindow:
         file_selector.set_callback("database_closing", self.handle_database_closing)
         file_selector.set_callback("database_deleted", self.handle_database_deleted)
 
+        # Open data folder button
+        open_data_folder_btn = ctk.CTkButton(
+            buttons_frame, 
+            text="Open Data Folder",
+            font=ctk.CTkFont(family="Inter", size=16, weight="bold"),
+            width=COMPONENT_DIMENSIONS["button"]["width"] * 3.5,
+            height=COMPONENT_DIMENSIONS["button"]["height"] * 1.5,
+            command=lambda: file_selector.open_data_folder(),
+            fg_color=UI_COLORS["open_data_folder"],
+            hover_color=UI_COLORS["open_data_folder_hover"],
+            text_color=UI_COLORS["white"],
+            corner_radius=8,
+        )
+        open_data_folder_btn.pack(
+            side="right", padx=UI_PADDING["small"], pady=UI_PADDING["small"]
+        )
+        file_selector.set_callback("data_folder_opened", self.handle_data_folder_opened)
+
         self.components["file_selector"] = file_selector
         self.components["file_buttons"] = {
             "add": add_files_btn,
             "remove": remove_files_btn,
             "clear": clear_all_btn,
+            "open_data_folder": open_data_folder_btn,
             "delete_database": delete_database_file_btn,
         }
 
@@ -413,7 +443,8 @@ class MainWindow:
 
         parent.grid_columnconfigure(0, weight=5, uniform="columns")
         parent.grid_columnconfigure(1, weight=5, uniform="columns")
-        parent.grid_columnconfigure(2, weight=1)
+        parent.grid_columnconfigure(2, weight=2)
+        parent.grid_columnconfigure(3, weight=1)
 
         # Custom graph panel
         custom_graph_frame = ctk.CTkFrame(parent)
@@ -431,7 +462,7 @@ class MainWindow:
         # Custom graph label
         custom_graph_label = ctk.CTkLabel(
             custom_graph_frame,
-            text="Custom Graph",
+            text="Common Points",
             font=ctk.CTkFont(family="Inter", size=32, weight="bold"),
             text_color=UI_COLORS["white"],
         )
@@ -475,12 +506,48 @@ class MainWindow:
             "cleared_custom_points", self.handle_cleared_custom_points
         )
 
+        # Search Panel
+        search_frame = ctk.CTkFrame(parent)
+        search_frame.grid(
+            row=0,
+            column=1,
+            rowspan=2,
+            sticky="nsew",
+            padx=UI_PADDING["small"],
+            pady=UI_PADDING["small"],
+        )
+        search_frame.grid_rowconfigure(1, weight=1)
+        search_frame.grid_columnconfigure(0, weight=1)
+
+        # Search label
+        search_label = ctk.CTkLabel(
+            search_frame,
+            text="Search Database",
+            font=ctk.CTkFont(family="Inter", size=32, weight="bold"),
+            text_color=UI_COLORS["white"],
+        )
+        search_label.grid(
+            row=0,
+            column=0,
+            sticky="n",
+            padx=UI_PADDING["small"],
+            pady=UI_PADDING["small"],
+        )
+
+        search_component = Search(search_frame)
+        search_component.grid(
+            row=1,
+            column=0,
+            sticky="nsew",
+            padx=UI_PADDING["small"],
+            pady=UI_PADDING["small"],
+        )
+
         # Preset graph panel
         preset_graph_frame = ctk.CTkFrame(parent)
         preset_graph_frame.grid(
             row=0,
-            column=1,
-            rowspan=2,
+            column=2,
             sticky="nsew",
             padx=UI_PADDING["small"],
             pady=UI_PADDING["small"],
@@ -491,7 +558,7 @@ class MainWindow:
         # Preset graph label
         preset_graph_label = ctk.CTkLabel(
             preset_graph_frame,
-            text="Preset Graphs",
+            text="Presets",
             font=ctk.CTkFont(family="Inter", size=32, weight="bold"),
             text_color=UI_COLORS["white"],
         )
@@ -535,11 +602,47 @@ class MainWindow:
             "cleared_graph_presets", self.handle_cleared_graph_presets
         )
 
+        # Selected Panel
+        selected_frame = ctk.CTkFrame(parent)
+        selected_frame.grid(
+            row=1,
+            column=2,
+            columnspan=2,
+            sticky="nsew",
+            padx=UI_PADDING["small"],
+            pady=UI_PADDING["small"],
+        )
+        selected_frame.grid_rowconfigure(1, weight=1)
+        selected_frame.grid_columnconfigure(0, weight=1)
+
+        selected_label = ctk.CTkLabel(
+            selected_frame,
+            text="Selected",
+            font=ctk.CTkFont(family="Inter", size=32, weight="bold"),
+            text_color=UI_COLORS["white"]
+        )
+        selected_label.grid(
+            row=0,
+            column=0,
+            sticky="n",
+            padx=UI_PADDING["small"],
+            pady=UI_PADDING["small"],
+        )
+
+        selected_component = Selected(selected_frame)
+        selected_component.grid(
+            row=1,
+            column=0,
+            sticky="nsew",
+            padx=UI_PADDING["small"],
+            pady=UI_PADDING["small"],
+        )
+
         # Parameters panel
         parameters_frame = ctk.CTkFrame(parent)
         parameters_frame.grid(
             row=0,
-            column=2,
+            column=3,
             sticky="nsew",
             padx=UI_PADDING["small"],
             pady=UI_PADDING["small"],
@@ -626,7 +729,7 @@ class MainWindow:
         include_csv_var = ctk.StringVar(value="off")
         include_csv_checkbox = ctk.CTkCheckBox(
             parameters_frame,
-            text="Generate CSV File with Raw Data",
+            text="Generate CSV File",
             font=ctk.CTkFont(family="Inter", size=16, weight="bold"),
             width=36,
             height=36,
@@ -675,11 +778,21 @@ class MainWindow:
                 "label": custom_graph_label,
                 "clear_btn": clear_custom_graph_btn,
             },
+            "search_panel": {
+                    "component": search_component,
+                    "frame": search_frame,
+                    "label": search_label,
+            },
             "preset_graph": {
                 "component": preset_graph,
                 "frame": preset_graph_frame,
                 "label": preset_graph_label,
                 "clear_btn": clear_preset_graph_btn,
+            },
+            "selected_panel": {
+                    "component": selected_component,
+                    "frame": selected_frame,
+                    "label": selected_label,
             },
             "parameters": {
                 "jna_current_limit": jna_current_limit_entry,
@@ -695,7 +808,7 @@ class MainWindow:
     def create_incident_viewer_tab(self, parent: ctk.CTkFrame) -> None:
         """Create incident viewer interface."""
         parent.grid_rowconfigure(0, weight=1)
-        parent.grid_columnconfigure(0, weight=7)
+        parent.grid_columnconfigure(0, weight=10)
         parent.grid_columnconfigure(1, weight=1)
         parent.grid_columnconfigure(2, weight=1)
 
@@ -823,6 +936,28 @@ class MainWindow:
             pady=(UI_PADDING["small"] * 25, UI_PADDING["small"]),
         )
 
+        # Export incidents to csv button
+        export_btn = ctk.CTkButton(
+            incident_viewer_options_frame,
+            text="Export",
+            font=ctk.CTkFont(family="Inter", size=24, weight="bold"),
+            width=250,
+            height=90,
+            fg_color=UI_COLORS["export"],
+            hover_color=UI_COLORS["export_hover"],
+            text_color=UI_COLORS["white"],
+            corner_radius=8,
+            command=lambda: self.on_export_incidents(),
+        )
+        export_btn.grid(
+            row=3,
+            column=0,
+            sticky="sw",
+            padx=UI_PADDING["small"],
+            pady=(UI_PADDING["small"] * 25, UI_PADDING["small"]),
+        )
+        export_btn.configure(state="disabled")
+
         # Report panel
         report_frame = ctk.CTkFrame(parent)
         report_frame.grid(
@@ -913,6 +1048,7 @@ class MainWindow:
                 "text_search_radio_btn": text_search_radio_btn,
                 "occurrence_search_btn": occurrence_search_radio_btn,
                 "populate": populate_btn,
+                "export": export_btn,
             },
             "report": {
                 "serial_number": serial_number_label,
@@ -949,6 +1085,7 @@ class MainWindow:
             footer_frame,
             width=800,
             height=30,
+            fg_color=UI_COLORS["frame"],
             progress_color=UI_COLORS["primary"],
             corner_radius=8,
         )
@@ -985,10 +1122,13 @@ class MainWindow:
         """Handles files added to file selector component"""
         # Update UI
         self.update_status(f"Added {count} files")
+        self.disable_graphing_btns()
+        self.disable_incident_btns()
+        params = self.collect_files_added_parameters()
 
         # Notify controller
         if "files_added" in self.callbacks:
-            self.callbacks["files_added"](count)
+            self.callbacks["files_added"](count, params)
 
     def handle_files_removed(self, count: int) -> None:
         """Handle files removed from file selector."""
@@ -1007,6 +1147,15 @@ class MainWindow:
         # Notify controller
         if "files_cleared" in self.callbacks:
             self.callbacks["files_cleared"](count)
+
+    def handle_data_folder_opened(self) -> None:
+        """Handles request to open data folder."""
+        # Update UI
+        self.update_status("Data folder opened")
+
+        # Notify controller
+        if "data_folder_opened" in self.callbacks:
+            self.callbacks["data_folder_opened"]()
 
     def handle_cleared_custom_points(self, count: int) -> None:
         """Handles points cleared from custom graph."""
@@ -1046,6 +1195,8 @@ class MainWindow:
         # Clear the incident viewer
         incident_viewer = self.components["incident"]["incident_viewer"]["component"]
         incident_viewer.clear_incidents()
+        incident_viewer.reset_page_number()
+        self.components["file_selector"].clear_all_files(force=True)
 
         self.components["incident"]["report"]["serial_number"].configure(
             text="Serial Number: LWS###"
@@ -1059,8 +1210,17 @@ class MainWindow:
 
         # Enable button click
         self.components["incident"]["incident_viewer_options"]["populate"].configure(
-            state="normal"
+            state="disabled"
         )
+
+        self.components["incident"]["incident_viewer_options"]["export"].configure(
+            state="disabled"
+        )
+
+        self.components["graphing"]["search_panel"]["component"].clear_component()
+        self.components["graphing"]["custom_graph"]["component"].clear()
+        self.components["graphing"]["preset_graph"]["component"].clear()
+        Selected.clear_selected()
 
         # Reset progress bar after a delay
         self.root.after(2000, lambda: self.update_progress(0))
@@ -1068,6 +1228,22 @@ class MainWindow:
         # Notify controller
         if "database_deleted" in self.callbacks:
             self.callbacks["database_deleted"]()
+
+    def collect_files_added_parameters(self) -> dict:
+        """
+        Collect all parameters needed after adding files
+        to the File Selector.
+
+        Returns:
+            dict: Dictionary containing all file loading parameters.
+        """
+        selected_files = self.components["file_selector"].get_selected_files()
+
+        return {
+            "files": selected_files,
+            "search_panel": self.components["graphing"]["search_panel"]["component"]
+        }
+
 
     def collect_generation_parameters(self) -> dict:
         """
@@ -1080,16 +1256,12 @@ class MainWindow:
 
         # Get selected custom points
         custom_graph = graphing_components["custom_graph"]["component"]
-        selected_io_points = [
-            key for key, var in custom_graph.io_state.items() if var.get() == "on"
-        ]
-        selected_vfd_points = [
-            key for key, var in custom_graph.vfd_state.items() if var.get() == "on"
-        ]
+        selected_io_points = Selected.selected_io_points
+        selected_vfd_points = [entry["name"] for entry in Selected.selected_vfd_points]
 
         # Get selected preset graphs
         preset_graph = graphing_components["preset_graph"]["component"]
-        selected_presets = preset_graph.get_selected_presets()
+        selected_presets = [entry["name"] for entry in Selected.selected_presets]
 
         # Get paramter values
         params = graphing_components["parameters"]
@@ -1134,8 +1306,9 @@ class MainWindow:
 
         selected_files = self.components["file_selector"].get_selected_files()
         incident_viewer = self.components["incident"]["incident_viewer"]["component"]
+        export_button = self.components["incident"]["incident_viewer_options"]["export"]
 
-        return {"files": selected_files, "incident_viewer": incident_viewer}
+        return {"files": selected_files, "incident_viewer": incident_viewer, "export_button": export_button}
 
     def on_generate_clicked(self) -> None:
         """Handle generate button click."""
@@ -1147,6 +1320,54 @@ class MainWindow:
         self.update_status("Starting graph generation...")
         self.update_progress(0.1)
 
+        self.disable_graphing_btns()
+
+        # Notify controller
+        if "generate_graphs" in self.callbacks:
+            self.callbacks["generate_graphs"](params)
+
+    def on_populate_incident_viewer(self) -> None:
+        """Handle populate incident viewer button click."""
+        try:
+
+            incident_params = self.collect_incident_parameters()
+            report_params = self.collect_report_parameters()
+
+            # Update UI
+            self.update_status("Populating incident viewer...")
+            self.update_progress(0.1)
+
+            self.disable_incident_btns()
+
+            # Notify controller
+            if "populate_incidents" in self.callbacks:
+                self.callbacks["populate_incidents"](incident_params)
+
+            if "populate_report" in self.callbacks:
+                self.callbacks["populate_report"](report_params)
+
+        except Exception as e:
+            self.update_status(f"Error starting incident population: {e}")
+
+    def on_export_incidents(self) -> None:
+        """Handle export alarms button click."""
+        try:
+            self.update_status("Exporting incidents to a csv file...")
+            self.update_progress(0.1)
+
+            if "export_incidents" in self.callbacks:
+                self.callbacks["export_incidents"]()
+
+        except Exception as e:
+            self.update_status(f"Error exporting incidents: {e}")
+
+    def disable_incident_btns(self):
+
+        self.components["incident"]["incident_viewer_options"][
+            "populate"
+        ].configure(state="disabled")
+
+    def disable_graphing_btns(self):
         # Disable button clicks
         self.components["graphing"]["generate"].configure(state="disabled")
         self.components["graphing"]["custom_graph"]["clear_btn"].configure(
@@ -1166,36 +1387,6 @@ class MainWindow:
         )
         self.components["graphing"]["custom_graph"]["component"].disable_checkboxes()
         self.components["graphing"]["preset_graph"]["component"].disable_checkboxes()
-
-        # Notify controller
-        if "generate_graphs" in self.callbacks:
-            self.callbacks["generate_graphs"](params)
-
-    def on_populate_incident_viewer(self) -> None:
-        """Handle populate incident viewer button click."""
-        try:
-
-            incident_params = self.collect_incident_parameters()
-            report_params = self.collect_report_parameters()
-
-            # Update UI
-            self.update_status("Populating incident viewer...")
-            self.update_progress(0.1)
-
-            # Disable button
-            self.components["incident"]["incident_viewer_options"][
-                "populate"
-            ].configure(state="disabled")
-
-            # Notify controller
-            if "populate_incidents" in self.callbacks:
-                self.callbacks["populate_incidents"](incident_params)
-
-            if "populate_report" in self.callbacks:
-                self.callbacks["populate_report"](report_params)
-
-        except Exception as e:
-            self.update_status(f"Error starting incident population: {e}")
 
     def enable_graphing_btns(self):
         """Re-enable the generate button."""
@@ -1217,6 +1408,12 @@ class MainWindow:
         )
         self.components["graphing"]["custom_graph"]["component"].enable_checkboxes()
         self.components["graphing"]["preset_graph"]["component"].enable_checkboxes()
+
+    def enable_incident_population(self):
+        """Re-enable the populate button."""
+        self.components["incident"]["incident_viewer_options"][
+                "populate"
+            ].configure(state="normal")
 
     def enable_database_deletion(self):
         """Enable the database deletion button."""

@@ -4,17 +4,18 @@ import os
 import sqlite3
 import sys
 import tarfile
-from typing import List
+from typing import List, Optional
 import glob
+from pathlib import Path
 
 import lz4.frame
 
-from config.constants import BATCH_SIZE, DATA_FOLDER_PATH
+from config.constants import BATCH_SIZE, DATA_FOLDER_PATH, MAGIC_NUMBER
 
 
 def get_unique_folder(path: str) -> str:
     """
-    Create a unique folder.
+    Get a unique folder.
 
     Parameters:
         path (str): Base path
@@ -28,6 +29,31 @@ def get_unique_folder(path: str) -> str:
         path = f"{path}({counter})"
         counter += 1
     return path
+
+def get_unique_filename(path: str) -> str:
+    """
+    Get a unique filename.
+
+    Parameters:
+        path (str): Base path
+    
+    Returns:
+        str: New path with number if needed
+    """
+
+    counter = 1
+    while os.path.exists(path):
+        original_path = Path(path)
+        name = original_path.stem
+        ext = original_path.suffix
+
+        new_name = f"{name}({counter}){ext}"
+        path = original_path.with_name(new_name)
+
+        counter += 1
+    
+    return path
+        
 
 
 def create_folder(path: str) -> None:
@@ -103,6 +129,59 @@ def get_file_size(file_path: str) -> int:
     except (OSError, FileNotFoundError):
         return 0
 
+def get_lz4_database_version(file_paths: List[str]) -> str:
+    """
+    Reads LZ4 frame to get the version number from the archive
+    Defaults to Version 1
+    Compares all files to ensure they all have the same version number
+
+    Parameters:
+        file_paths (List[str]): LZ4 archive files
+
+    Returns:
+        str: Database version number ("1" or "2")
+    """
+
+    versions = []
+
+    # Add all archive versions to list
+    for file_path in file_paths:
+        # Default to Version 1 DB
+        version_number = "1"
+
+        with open(file_path, 'rb') as file:
+            content = file.read(128)
+
+        # Find Skippable Frame Sequence
+        offset = content.find(MAGIC_NUMBER)
+
+        if offset == -1: # DB Version 1
+            version_number = "1"
+        else: # DB Version 2?
+            # Size of Version Number
+            size = int.from_bytes(content[offset + 4:offset + 8], "little")
+            payload = content[offset + 8:offset + 8 + size]
+
+            # Version Number
+            version = int.from_bytes(payload, "little")
+            if version == 2: # DB Version 2
+                version_number = "2"
+
+        versions.append(version_number)
+
+    # Compare versions
+    version_to_compare = versions[0]
+    for version in versions:
+        if version == version_to_compare:
+            continue
+        else:
+            # Default to Version 1 DB Here
+            print("DEBUG: Mismatched DB Versions found - Defaulting to Version 1")
+            print(f"DEBUG: Found DB Version {version_to_compare} and {version}")
+            return "1"
+
+    print(f"DEBUG: Setting DB Version to {versions[0]}")
+    return versions[0]
 
 def decompress_datadownload(file_paths: List[str]) -> bool:
     """
@@ -124,7 +203,32 @@ def decompress_datadownload(file_paths: List[str]) -> bool:
     except Exception as e:
         pass
         return False
+    
+def find_first_valid_database(file_paths: List[str]) -> Optional[int]:
+    """
+    Finds first valid database schema given a list of database paths.
 
+    Parameters:
+        file_paths (List[str]): List of file paths.
+
+    Returns:
+        Optional[str]: Valid index in file_paths, otherwise returns None
+    """
+
+    counter = 0
+    for db in file_paths:
+        with sqlite3.connect(db) as conn:
+            cursor = conn.cursor()
+
+            cursor.execute("SELECT name FROM sqlite_master WHERE type = 'table' and name NOT LIKE 'sqlite_%'")
+            table_names = [row[0] for row in cursor.fetchall()]
+
+            # Using whether or not the table contains AnalogInputs and DigitalInput to determine if the schema is valid
+            if ("AnalogInput@0" in table_names or "AnalogInput" in table_names) and ("DigitalInput@0" in table_names or "DigitalInput" in table_names):
+                return counter
+        counter += 1
+
+    return None
 
 def merge_batch(
     file_paths: List[str], target_database: str, create_tables: bool = True
@@ -134,14 +238,13 @@ def merge_batch(
 
     Parameters:
       file_paths (List[str]): Database files in batch
-      target_databse (str): Target database file
+      target_database (str): Target database file
       create_tables (bool): True if creating tables in database, False if not
 
     Returns:
       bool: True if merging successful, False otherwise
     """
     try:
-        pass
         with sqlite3.connect(target_database) as database_connection:
             database_cursor = database_connection.cursor()
 
@@ -156,7 +259,6 @@ def merge_batch(
             attached_database = None
             for db in file_paths:
                 if not os.path.exists(db):
-                    pass
                     continue
 
                 if "FB20.DC.1" in db or "temp_merge" in db:
@@ -165,7 +267,6 @@ def merge_batch(
                         attached_database = db
                         break
                     except Exception as e:
-                        pass
                         continue
 
             # Get list of tables and create them in the target database
@@ -178,10 +279,6 @@ def merge_batch(
                     pass  # Add logic later
 
                 tables = database_cursor.fetchall()
-                if not tables:
-                    pass
-                else:
-                    pass
 
             except Exception as e:
                 pass
@@ -220,6 +317,7 @@ def merge_batch(
                 except (sqlite3.OperationalError, Exception) as e:
                     pass
 
+                database_connection.commit()
                 # Insert data from each table
                 for table_name, _ in tables:
                     table_name = "'" + table_name + "'"
@@ -231,13 +329,14 @@ def merge_batch(
                         # Used to filter out blank entries between databases
                         pass
 
+                # Write transaction before detach
+                database_connection.commit()
                 # Detach the source database
                 try:
                     database_cursor.execute(f"DETACH DATABASE {alias}")
                 except sqlite3.OperationalError as e:
                     pass  # Add logic later
 
-            database_connection.commit()
             return True
 
     except Exception as e:
@@ -255,30 +354,36 @@ def merge_database_files(file_paths: List[str]) -> bool:
     Returns:
       bool: True if merging successful, False otherwise
     """
-    try:
-        target_database = os.path.join(DATA_FOLDER_PATH, "merged_db.sqlite")
 
-        # Process database files in batches of 9 (SQLITE3 limit is 10)
-        for i in range(0, len(file_paths), BATCH_SIZE):
-            current_batch = file_paths[i : i + BATCH_SIZE]
-            temp_target_database = (
-                target_database
-                if i == 0
-                else os.path.join(DATA_FOLDER_PATH, f"temp_merge_{i}.sqlite")
+    target_database = os.path.join(DATA_FOLDER_PATH, "merged_db.sqlite")
+    first_valid_database = find_first_valid_database(file_paths)
+    if first_valid_database is None:
+        raise ValueError("No valid database files exist")
+    print(f"DEBUG: Found valid database at index {first_valid_database}" + " - from {file_util.merge_database_files}")
+
+    merge_batch([file_paths[first_valid_database]], target_database)
+    file_paths.pop(first_valid_database)
+
+    # Process database files in batches of 9 (SQLITE3 limit is 10)
+    batch_count = 1
+    for i in range(0, len(file_paths), BATCH_SIZE):
+        current_batch = file_paths[i : i + BATCH_SIZE]
+        temp_target_database = (
+            target_database
+            if i == 0
+            else os.path.join(DATA_FOLDER_PATH, f"temp_merge_{i}.sqlite")
+        )
+
+        # Merging logic
+        print(f"DEBUG: Merging Batch {batch_count}" + " - from {file_util.merge_database_files}")
+        batch_count += 1
+        merge_batch(current_batch, temp_target_database)
+        if i > 0:
+            # Merge temp database into target database
+            merge_batch(
+                [temp_target_database], target_database, create_tables=False
             )
-
-            # Merging logic
-            merge_batch(current_batch, temp_target_database)
-            if i > 0:
-                # Merge temp database into target database
-                merge_batch(
-                    [temp_target_database], target_database, create_tables=False
-                )
-        return True
-
-    except Exception as e:
-        pass
-        return False
+    return True
 
 
 def get_database_filepaths() -> List[str]:
@@ -294,20 +399,22 @@ def cleanup_data_directory() -> bool:
     """
     Clean up DDT DATA directory:
     DELETES:
-    *.db
+    *.db (Except fbhmi.db)
+    *.sqlite (Except merged_db.sqlite)
     """
-    pattern = os.path.join(DATA_FOLDER_PATH, "*.db")
-    db_files = glob.glob(pattern)
+    try:
+        for filename in os.listdir(DATA_FOLDER_PATH):
+            file_path = os.path.join(DATA_FOLDER_PATH, filename)
 
-    for db_file in db_files:
-        try:
-            if db_file != os.path.join(DATA_FOLDER_PATH, "fbhmi.db"):
-                os.remove(db_file)
-        except OSError as e:
-            pass
-            return False
+            db_delete = filename.endswith(".db") and filename != "fbhmi.db"
+            temp_sqlite_delete = filename.endswith(".sqlite") and filename.startswith("temp_merge")
 
-    return True
+            if db_delete or temp_sqlite_delete:
+                os.remove(file_path)
+
+        return True
+    except OSError:
+        return False
 
 
 def get_xml_file() -> str:
@@ -325,3 +432,10 @@ def get_xml_file() -> str:
         return text_dic[0]
     else:
         return None
+
+def open_file(file_path: str) -> None:
+    """Starts a file for the user"""
+    try:
+        os.startfile(file_path)
+    except Exception as e:
+        print(f"ERROR: BAD FILE {e}")

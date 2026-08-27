@@ -1,25 +1,33 @@
 """Main application workflow and logic."""
 
 import os
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import threading
 
 from config.point_mapping import VFD_POINTS, GRAPH_PRESETS
-from config.constants import DATA_FOLDER_PATH
+from config.constants import DATA_FOLDER_PATH, ALARM_CSV_TITLE
 from data.database_manager import DatabaseManager
 from data.selected_data_manager import SelectedDataManager
 from data.incident_manager import IncidentManager
 from data.csv_generator import CSVGenerator
+from data.incident_exporter import IncidentExorter
+from ui.components.search import Search
 from util.file_util import (
     decompress_datadownload,
     merge_database_files,
     get_database_filepaths,
+    open_file,
+    get_lz4_database_version
 )
 from util.time_util import (
     convert_timestamp_to_readable,
     enter_time_zone_offset,
     apply_time_zone_offset_to_incidents,
     apply_time_zone_offset_to_report,
+)
+from util.util_functions import (
+    convert_io_type,
+    flip_bits
 )
 from viz.graph_generator import GraphGenerator
 
@@ -35,6 +43,8 @@ class WorkflowManager:
         self.time_zone_offset = None
         self.timezone_ready = threading.Event()
 
+        self.incidents_for_export = None
+
     def load_files(self, file_paths: list) -> str:
         """
         Load and parse database files.
@@ -46,6 +56,10 @@ class WorkflowManager:
             str: Merged database file path or ""
         """
 
+        # Get Database Version Number
+        db_version_number = get_lz4_database_version(file_paths)
+        DatabaseManager.set_database_version(db_version_number)
+
         # Decompress files
         decompress_datadownload(file_paths)
 
@@ -53,12 +67,24 @@ class WorkflowManager:
         success = merge_database_files(get_database_filepaths())
 
         if success:
+            self.pull_io_points()
             return os.path.join(DATA_FOLDER_PATH, "merged_db.sqlite")
         else:
             return ""
 
+    def pull_io_points(self) -> List[Dict[str, Any]]:
+        """
+        Pulls all IO Points from the database to populate the 'Search Database'
+        panel.
+
+        Retuns:
+            List[Dict[str, Any]]: List of all io points
+        """ 
+        points = self.database_manager.get_all_io_points()
+        return points
+
     def process_data(
-        self, io_points: list, vfd_points: list, graph_presets: list
+        self, io_points: List[Dict[str, Any]], vfd_points: List[Dict[str, Any]], graph_presets: list
     ) -> dict:
         """Query for selected points from the database file."""
 
@@ -76,27 +102,32 @@ class WorkflowManager:
 
                 # Get IO Point info
                 for io_point in io_points:
+                    name = io_point["name"]
+                    io_type = io_point["type"]
+
 
                     # Retrieve data from IOConfig@0
-                    io_point_info[io_point] = self.database_manager.get_io_point_info(
-                        io_point
+                    io_point_info[name] = self.database_manager.get_io_point_info(
+                        name,
+                        io_type
                     )
 
-                    if io_point_info[io_point]["active"] == 0:
+                    if io_point_info[name]["active"] == 0:
+                        print(f"DEBUG: {io_point} was not active")
                         continue  # IO point is not active
 
                     else:
                         # Retrieve data from corresponding table
                         timestamp_value_list_io = (
                             self.database_manager.get_io_point_value(
-                                io_point_info[io_point]["io_id"],
-                                io_point_info[io_point]["io_type"],
+                                io_point_info[name]["io_id"],
+                                io_type,
                             )
                         )
 
                         # Add to data dictionary
                         selected_data_manager.add_point(
-                            io_point, timestamp_value_list_io
+                            name, timestamp_value_list_io
                         )
 
             except Exception as e:
@@ -116,6 +147,7 @@ class WorkflowManager:
                     )
 
                     if vfd_point_info[vfd_point]["active"] == 0:
+                        print(f"DEBUG: {vfd_point} was not active")
                         continue  # VFD point is not active
 
                     else:
@@ -126,6 +158,11 @@ class WorkflowManager:
                                 VFD_POINTS[vfd_point]["type"],
                             )
                         )
+
+                        # Flip bits if type is comms_wd_trip to stay consistent with devOk in Node Status Table
+                        # For some reason in the comms_wd_trip column 1 means no comms and 0 means comms
+                        if VFD_POINTS[vfd_point]["type"] == "comms_wd_trip":
+                            flip_bits(timestamp_value_list_vfd)
 
                         # Add to data dictionary
                         selected_data_manager.add_point(
@@ -145,60 +182,62 @@ class WorkflowManager:
                     preset_points = GRAPH_PRESETS[preset]
 
                     # Iterate through each point
-                    for point in preset_points:
+                    for entry in preset_points:
+                        name = entry["name"]
 
                         # Determine if IO or VFD
-                        if point in VFD_POINTS.keys():  # VFD
+                        if name in VFD_POINTS.keys():  # VFD
 
                             # Retrieve info from VFDConfig@0
-                            graph_preset_point_info[point] = (
-                                self.database_manager.get_vfd_point_info(point)
+                            graph_preset_point_info[name] = (
+                                self.database_manager.get_vfd_point_info(name)
                             )
 
-                            if graph_preset_point_info[point]["active"] == 0:
-                                pass
+                            if graph_preset_point_info[name]["active"] == 0:
+                                print(f"DEBUG: {name} not active - skipping Graph Preset")
                                 break  # VFD point is not active - skip preset
 
                             else:
                                 # Retrieve data from corresonding table
                                 timestamp_value_list_preset = (
                                     self.database_manager.get_vfd_point_value(
-                                        graph_preset_point_info[point]["vfd_id"],
-                                        VFD_POINTS[point]["type"],
+                                        graph_preset_point_info[name]["vfd_id"],
+                                        VFD_POINTS[name]["type"],
                                     )
                                 )
 
                                 # Add to data dictionary
                                 selected_data_manager.add_preset(
-                                    preset, point, timestamp_value_list_preset
+                                    preset, name, timestamp_value_list_preset
                                 )
 
                         else:  # IO
+                            io_type = convert_io_type(entry["type"])
 
-                            # Retrieve info from IOConfig@0
-                            graph_preset_point_info[point] = (
-                                self.database_manager.get_io_point_info(point)
+                            # Retrieve info from IOConfig
+                            graph_preset_point_info[name] = (
+                                self.database_manager.get_io_point_info(name, io_type)
                             )
 
-                            if graph_preset_point_info[point]["active"] == 0:
-                                pass
+                            if graph_preset_point_info[name]["active"] == 0:
+                                print(f"DEBUG: {name} not active - skipping Graph Preset")
                                 break  # IO point is not active - skip preset
 
                             else:
                                 # Retrieve data from corresponding table
                                 timestamp_value_list_preset = (
                                     self.database_manager.get_io_point_value(
-                                        graph_preset_point_info[point]["io_id"],
-                                        graph_preset_point_info[point]["io_type"],
+                                        graph_preset_point_info[name]["io_id"],
+                                        io_type,
                                     )
                                 )
 
                                 # Add to data dictionary
                                 selected_data_manager.add_preset(
-                                    preset, point, timestamp_value_list_preset
+                                    preset, name, timestamp_value_list_preset
                                 )
             except Exception as e:
-                pass
+                print(f"Error while adding points: {e}")
 
         if self.time_zone_offset:
             return enter_time_zone_offset(
@@ -232,6 +271,15 @@ class WorkflowManager:
             from tkinter import simpledialog, messagebox
             import tkinter as tk
 
+            report_info = self.database_manager.get_report_info()
+            time_range_string = "Time Range Unavailable"
+
+            if report_info:
+                report_info = report_info[0]
+                min_time = convert_timestamp_to_readable(report_info["first_timestamp"])
+                max_time = convert_timestamp_to_readable(report_info["last_timestamp"])
+                time_range_string = f"Time range currently spans from {min_time} - {max_time}"
+
             temp_root = tk.Tk()
             temp_root.withdraw()
 
@@ -239,6 +287,7 @@ class WorkflowManager:
             wants_offset = messagebox.askyesno(
                 "No Timezone Offset Parameter Found",
                 "No timezone offset parameter was found in the database.\n\n"
+                f"{time_range_string}\n\n"
                 "Would you like to enter a custom timezone offset?",
                 parent=temp_root,
             )
@@ -273,15 +322,23 @@ class WorkflowManager:
         """
 
         csv_generator = CSVGenerator()
-        csv_generator.create_csv()
 
         for category in data:
             if category == "preset":
                 for preset_name, preset_data in data[category].items():
-                    csv_generator.add_preset_rows(preset_name, preset_data)
+
+                    csv_headers = list(preset_data.keys())
+                    csv_headers.insert(0, "Timestamp")
+                    csv_generator.create_csv(preset_name + ".csv", csv_headers)
+                    csv_generator.write_to_csv(preset_data)
             else:
-                for point_name, time_value_list in data[category].items():
-                    csv_generator.add_point_rows(point_name, time_value_list)
+
+                if data.get(category):
+
+                    csv_headers = list(data[category].keys())
+                    csv_headers.insert(0, "Timestamp")
+                    csv_generator.create_csv("Custom.csv", csv_headers)
+                    csv_generator.write_to_csv(data[category])
 
         return True
 
@@ -329,27 +386,31 @@ class WorkflowManager:
 
         if self.time_zone_offset:
             self.set_timezone_offset_ready()
-            return apply_time_zone_offset_to_incidents(
+            self.incidents_for_export =  apply_time_zone_offset_to_incidents(
                 incident_manager.get_clean_incidents(), self.time_zone_offset
             )
+            return self.incidents_for_export
         else:
             self.time_zone_offset = self.database_manager.get_time_zone_offset()
             if self.time_zone_offset:
                 self.set_timezone_offset_ready()
-                return apply_time_zone_offset_to_incidents(
+                self.incidents_for_export = apply_time_zone_offset_to_incidents(
                     incident_manager.get_clean_incidents(), self.time_zone_offset
                 )
+                return self.incidents_for_export
             else:
                 offset_hours = self._ask_for_timezone_offset()
                 self.time_zone_offset = offset_hours
                 if offset_hours is not None:
                     self.set_timezone_offset_ready()
-                    return apply_time_zone_offset_to_incidents(
+                    self.incidents_for_export = apply_time_zone_offset_to_incidents(
                         incident_manager.get_clean_incidents(), offset_hours
                     )
+                    return self.incidents_for_export
                 else:
                     self.set_timezone_offset_ready()
-                    return incident_manager.get_clean_incidents()
+                    self.incidents_for_export = incident_manager.get_clean_incidents()
+                    return self.incidents_for_export
 
     def wait_for_timezone_offset(self) -> bool:
         """
@@ -407,6 +468,22 @@ class WorkflowManager:
         params["date"].configure(text=f"Date: {start_words[0]} - {end_words[0]}")
 
         params["time"].configure(text=f"Time: {start_words[1]} - {end_words[1]}")
+
+    def export_incidents(self) -> None:
+        """
+        Export indients to a csv file.
+        """
+
+        incident_exporter = IncidentExorter(self.incidents_for_export)
+
+        # Create CSV
+        incident_exporter.create_csv()
+
+        # Write to file
+        incident_exporter.export_to_csv()
+
+        # Open File for User
+        open_file(os.path.join(DATA_FOLDER_PATH,ALARM_CSV_TITLE))
 
     def set_time_zone_offset(self, offset: Optional[int]):
         """Set timezone offset variable."""
