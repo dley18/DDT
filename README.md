@@ -120,8 +120,8 @@ src/                             # Source code
 ### Setup
 1. Clone the repository:
    ```sh
-   git clone https://ControlAutomation@dev.azure.com/ControlAutomation/C%20and%20A%20Projects/_git/FB2_DataDownloadTool
-   cd FB2_DataDownloadTool
+   git clone https://github.com/dley18/DDT.git
+   cd DDT
    ```
 2. Install dependencies using UV
    ```sh
